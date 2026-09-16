@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 
 var tasks = new ConcurrentDictionary<string, DownloadTask>();
+const string HostVersion = "0.4.6";
 var input = Console.OpenStandardInput();
 var output = Console.OpenStandardOutput();
 var outputLock = new object();
@@ -32,7 +33,7 @@ while (true)
         WriteResponse(output, outputLock, WithRequestId(requestId, StartDownload(root, tasks)));
         break;
       case "list":
-        WriteResponse(output, outputLock, WithRequestId(requestId, new { ok = true, tasks = tasks.Values.OrderByDescending(t => t.StartedAt).ToArray() }));
+        WriteResponse(output, outputLock, WithRequestId(requestId, new { ok = true, hostVersion = HostVersion, tasks = tasks.Values.OrderByDescending(t => t.StartedAt).ToArray() }));
         break;
       case "cancel":
         WriteResponse(output, outputLock, WithRequestId(requestId, CancelDownload(root, tasks)));
@@ -278,7 +279,7 @@ static object ResolveVideos(JsonElement root)
       }
     }
 
-    return new { ok = true, title = title ?? url, sourceType, count = videos.Count, videos, audioTracks = tracks, origLang };
+    return new { ok = true, hostVersion = HostVersion, title = title ?? url, sourceType, count = videos.Count, videos, audioTracks = tracks, origLang };
   }
   catch (Exception ex)
   {
@@ -386,7 +387,7 @@ static object ClearDownloads(ConcurrentDictionary<string, DownloadTask> tasks)
     }
   }
   var left = tasks.Values.OrderByDescending(t => t.StartedAt).ToArray();
-  return new { ok = true, removed, tasks = left };
+  return new { ok = true, hostVersion = HostVersion, removed, tasks = left };
 }
 
 static async Task PumpProcessAsync(Process process, DownloadTask task)
@@ -527,6 +528,41 @@ static string NormalizeLang(string? value)
   return string.Join("-", new[] { parts[0].ToLowerInvariant() }.Concat(parts.Skip(1)));
 }
 
+static string Lang639_2(string? code)
+{
+  var primary = (code ?? "").Split('-')[0].ToLowerInvariant();
+  return primary switch
+  {
+    "ru" => "rus", "uk" => "ukr", "be" => "bel", "en" => "eng", "es" => "spa",
+    "pt" => "por", "de" => "deu", "fr" => "fra", "it" => "ita", "pl" => "pol",
+    "nl" => "nld", "tr" => "tur", "ar" => "ara", "hi" => "hin", "ja" => "jpn",
+    "ko" => "kor", "zh" => "zho", "iw" => "heb", "he" => "heb", "pa" => "pan",
+    "bn" => "ben", "ta" => "tam", "te" => "tel", "ml" => "mal", "mr" => "mar",
+    "id" => "ind", "ms" => "msa", "vi" => "vie", "th" => "tha", "el" => "ell",
+    "hu" => "hun", "cs" => "ces", "sk" => "slk", "ro" => "ron", "bg" => "bul",
+    "sr" => "srp", "hr" => "hrv", "da" => "dan", "fi" => "fin", "no" => "nor",
+    "sv" => "swe", _ => ""
+  };
+}
+
+static string[] DualPpArgs(string dubLang, string origLang)
+{
+  var parts = new List<string>();
+  var dubIso = Lang639_2(dubLang);
+  if (!string.IsNullOrEmpty(dubIso))
+  {
+    parts.Add($"-metadata:s:a:0 language={dubIso}");
+  }
+  parts.Add("-disposition:a:0 default");
+  var origIso = Lang639_2(origLang);
+  if (!string.IsNullOrEmpty(origIso))
+  {
+    parts.Add($"-metadata:s:a:1 language={origIso}");
+  }
+  parts.Add("-disposition:a:1 0");
+  return new[] { "--postprocessor-args", "Merger:" + string.Join(" ", parts) };
+}
+
 static string[] BuildYtDlpArgs(string url, string outputTemplate, string quality, string playlistMode, string vcodec = "auto",
   string abitrate = "0", string trackMode = "orig", string dubLang = "", string origLang = "")
 {
@@ -562,6 +598,7 @@ static string[] BuildYtDlpArgs(string url, string outputTemplate, string quality
   var mergeArgs = new List<string>();
   var streamArgs = new List<string>();
   var audioPost = new List<string>();
+  var ppArgs = new List<string>();
 
   var height = QualityHeight(quality);
   if (height is int h)
@@ -573,6 +610,7 @@ static string[] BuildYtDlpArgs(string url, string outputTemplate, string quality
       mergeArgs.Add("--merge-output-format");
       mergeArgs.Add("mkv");
       streamArgs.Add("--audio-multistreams");
+      ppArgs.AddRange(DualPpArgs(dubLang, origLang));
     }
     else if (trackMode == "dub")
     {
@@ -598,6 +636,7 @@ static string[] BuildYtDlpArgs(string url, string outputTemplate, string quality
       mergeArgs.Add("--merge-output-format");
       mergeArgs.Add("mkv");
       streamArgs.Add("--audio-multistreams");
+      ppArgs.AddRange(DualPpArgs(dubLang, origLang));
     }
     else if (trackMode == "dub")
     {
@@ -666,6 +705,7 @@ static string[] BuildYtDlpArgs(string url, string outputTemplate, string quality
   }
 
   args.AddRange(audioPost);
+  args.AddRange(ppArgs);
 
   args.Add(url);
   return args.ToArray();

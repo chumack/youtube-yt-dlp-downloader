@@ -39,6 +39,9 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 HOST_NAME = "com.fengj.youtube_ytdlp"
+# Версия протокола хоста. Попап сверяет её с EXPECTED_HOST_VERSION и просит
+# переустановить хост при расхождении (иначе новые функции молча не работают).
+HOST_VERSION = "0.4.6"
 YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
 RESOLVE_TIMEOUT = 60
 OUTPUT_TEMPLATE = "%(playlist_index&{} - |)s%(title).120B [%(id)s].%(ext)s"
@@ -399,6 +402,7 @@ def action_resolve(root):
             diag("tracks failed: %s" % ex)
     return {
         "ok": True,
+        "hostVersion": HOST_VERSION,
         "title": title or url,
         "sourceType": source_type,
         "count": len(videos),
@@ -464,6 +468,25 @@ BITRATE_FORMATS = {"mp3", "m4a", "opus"}
 TRACK_MODES = {"orig", "dub", "dual"}
 
 LANG_RE = re.compile(r"^[a-z]{2,3}(?:-[A-Za-z]+)*$")
+
+# ISO 639-1 -> ISO 639-2/T для тегов языка в контейнере (ffmpeg).
+# Неизвестные коды не пишем вовсе, чтобы не ронять слияние.
+ISO639_2 = {
+    "ru": "rus", "uk": "ukr", "be": "bel", "en": "eng", "es": "spa",
+    "pt": "por", "de": "deu", "fr": "fra", "it": "ita", "pl": "pol",
+    "nl": "nld", "tr": "tur", "ar": "ara", "hi": "hin", "ja": "jpn",
+    "ko": "kor", "zh": "zho", "iw": "heb", "he": "heb", "pa": "pan",
+    "bn": "ben", "ta": "tam", "te": "tel", "ml": "mal", "mr": "mar",
+    "id": "ind", "ms": "msa", "vi": "vie", "th": "tha", "el": "ell",
+    "hu": "hun", "cs": "ces", "sk": "slk", "ro": "ron", "bg": "bul",
+    "sr": "srp", "hr": "hrv", "da": "dan", "fi": "fin", "no": "nor",
+    "sv": "swe",
+}
+
+
+def lang639_2(code):
+    primary = str(code or "").split("-")[0].lower()
+    return ISO639_2.get(primary, "")
 
 
 def normalize_abitrate(value):
@@ -587,6 +610,7 @@ def build_ytdlp_args(url, output_template, quality, playlist_mode, vcodec="auto"
     merge_args = []
     stream_args = []
     audio_post = []
+    pp_args = []
 
     if quality in VIDEO_HEIGHTS:
         h = VIDEO_HEIGHTS[quality]
@@ -599,6 +623,7 @@ def build_ytdlp_args(url, output_template, quality, playlist_mode, vcodec="auto"
             )
             merge_args = ["--merge-output-format", "mkv"]
             stream_args = ["--audio-multistreams"]
+            pp_args = dual_pp_args(dub_lang, orig_lang)
         elif track_mode == "dub":
             fmt = (
                 "bestvideo[height<=%d]%s+bestaudio%s/"
@@ -628,6 +653,7 @@ def build_ytdlp_args(url, output_template, quality, playlist_mode, vcodec="auto"
             )
             merge_args = ["--merge-output-format", "mkv"]
             stream_args = ["--audio-multistreams"]
+            pp_args = dual_pp_args(dub_lang, orig_lang)
         elif track_mode == "dub":
             fmt = "bestvideo%s+bestaudio%s/bestvideo+bestaudio" % (codec, dub_f)
             merge_args = ["--merge-output-format", "mp4"]
@@ -678,8 +704,28 @@ def build_ytdlp_args(url, output_template, quality, playlist_mode, vcodec="auto"
     else:
         args.append("--no-playlist")
     args += audio_post
+    args += pp_args
     args.append(url)
     return args
+
+
+def dual_pp_args(dub_lang, orig_lang):
+    """Теги языка и флаг default для dual-режима.
+
+    Первая дорожка (дубляж) помечается своим языком и default,
+    вторая (оригинал) — своим языком без default. Неизвестные коды
+    не пишем вовсе, чтобы не ронять слияние.
+    """
+    parts = []
+    dub_iso = lang639_2(dub_lang)
+    if dub_iso:
+        parts.append("-metadata:s:a:0 language=%s" % dub_iso)
+    parts.append("-disposition:a:0 default")
+    orig_iso = lang639_2(orig_lang)
+    if orig_iso:
+        parts.append("-metadata:s:a:1 language=%s" % orig_iso)
+    parts.append("-disposition:a:1 0")
+    return ["--postprocessor-args", "Merger:" + " ".join(parts)]
 
 
 PCT_RE = re.compile(r"\[download\]\s+(\d+(?:\.\d+)?)%")
@@ -868,7 +914,7 @@ def action_list():
             reverse=True,
         )
     diag("list count=%d" % len(ordered))
-    return {"ok": True, "tasks": ordered}
+    return {"ok": True, "hostVersion": HOST_VERSION, "tasks": ordered}
 
 
 def action_clear(root):
@@ -889,7 +935,7 @@ def action_clear(root):
             reverse=True,
         )
     diag("clear removed=%d left=%d" % (removed, len(ordered)))
-    return {"ok": True, "removed": removed, "tasks": ordered}
+    return {"ok": True, "hostVersion": HOST_VERSION, "removed": removed, "tasks": ordered}
 
 
 def action_cancel(root):

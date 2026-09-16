@@ -125,6 +125,22 @@ let resolvedVideos = [];
 let resolvedMeta = { tracks: [], origLang: "" };
 let previewMode = "";
 let oauthConfigured = true;
+// Версия протокола хоста. При расхождении новые функции молча не работают,
+// поэтому один раз за сессию показываем просьбу переустановить хост.
+const EXPECTED_HOST_VERSION = "0.4.6";
+let hostVersionWarned = false;
+
+function checkHostVersion(response) {
+  if (hostVersionWarned) {
+    return;
+  }
+  const v = response?.hostVersion || "";
+  if (v === EXPECTED_HOST_VERSION) {
+    return;
+  }
+  hostVersionWarned = true;
+  setStatus(`Native-host устарел (${v || "версия неизвестна"}): переустановите хост запуском Install-NativeHost, иначе новые функции не работают.`, "error");
+}
 
 function setStatus(message, state = "") {
   statusText.textContent = message;
@@ -448,6 +464,7 @@ async function resolveCurrentUrl() {
       ? ` Куки: ${response.cookiesSent} (${response.cookiesFrom || "браузер"}).`
       : "";
     setStatus(`Готово: найдено видео: ${resolvedVideos.length}.${cookiesNote}`, "success");
+    checkHostVersion(response);
   } catch (error) {
     resolvedVideos = [];
     resolvedMeta = { tracks: [], origLang: "" };
@@ -532,6 +549,7 @@ async function refreshTasks() {
   try {
     const response = await sendNative({ action: "list" });
     renderTasks(response.tasks || []);
+    checkHostVersion(response);
   } catch (error) {
     tasksList.innerHTML = emptyState("Не могу прочитать задачи", error.message, "error");
   }
