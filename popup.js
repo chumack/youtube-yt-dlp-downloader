@@ -490,6 +490,16 @@ async function downloadSelectedVideos() {
   const trackMode = getTrackMode();
   const dubLang = getDubLang();
   const origLang = resolvedMeta.origLang || "";
+  // Если resolve уже показал дорожки и нужного дубляжа среди них нет —
+  // сразу говорим об этом, не дёргая хост.
+  if ((trackMode === "dub" || trackMode === "dual") && resolvedMeta.tracks.length > 0 &&
+      !resolvedMeta.tracks.some(t => String(t.lang || "").toLowerCase() === dubLang.toLowerCase())) {
+    const dubs = resolvedMeta.tracks.filter(t => !t.original).map(t => t.lang.toUpperCase()).join(", ");
+    setStatus(dubs
+      ? `В этом видео нет дубляжа ${dubLang.toUpperCase()} — доступны: ${dubs}.`
+      : "В этом видео нет дубляжа — только оригинал.", "error");
+    return;
+  }
   localStorage.setItem(downloadDirStorageKey, downloadDir);
   localStorage.setItem(cookiesStorageKey, useBrowserCookiesInput.checked ? "1" : "0");
   localStorage.setItem(qualityStorageKey, quality);

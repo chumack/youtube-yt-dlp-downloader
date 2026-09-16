@@ -406,7 +406,17 @@ static async Task PumpProcessAsync(Process process, DownloadTask task)
   if (task.Status != "canceled")
   {
     task.Status = process.ExitCode == 0 ? "done" : "error";
-    task.Message = process.ExitCode == 0 ? "Finished" : $"yt-dlp exited with code {process.ExitCode}";
+    if (process.ExitCode == 0)
+    {
+      task.Message = "Finished";
+    }
+    else
+    {
+      var raw = string.IsNullOrWhiteSpace(task.LastLine) ? $"yt-dlp exited with code {process.ExitCode}" : task.LastLine;
+      task.Message = WithTrackHint(raw, task);
+      // popup prefers LastLine: put the hint where it is visible
+      task.LastLine = task.Message;
+    }
   }
   await writer.WriteLineAsync($"exit_code={process.ExitCode}");
 }
@@ -561,6 +571,21 @@ static string[] DualPpArgs(string dubLang, string origLang)
   }
   parts.Add("-disposition:a:1 0");
   return new[] { "--postprocessor-args", "Merger:" + string.Join(" ", parts) };
+}
+
+static string WithTrackHint(string? text, DownloadTask task)
+{
+  if (string.IsNullOrEmpty(text) || !text.Contains("requested format is not available", StringComparison.OrdinalIgnoreCase))
+  {
+    return text ?? "";
+  }
+  var mode = (task.TrackMode ?? "orig").ToLowerInvariant();
+  var dub = task.DubLang ?? "";
+  if ((mode == "dub" || mode == "dual") && !string.IsNullOrEmpty(dub))
+  {
+    return $"Дубляж {dub.ToUpperInvariant()} недоступен для этого видео: возможно, его нет или YouTube отдал не все форматы. " + text;
+  }
+  return text;
 }
 
 static string[] BuildYtDlpArgs(string url, string outputTemplate, string quality, string playlistMode, string vcodec = "auto",

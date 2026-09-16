@@ -217,6 +217,17 @@ def with_bot_hint(text):
     return text
 
 
+def with_track_hint(text, task):
+    if not text or "requested format is not available" not in text.lower():
+        return text
+    mode = str(task.get("TrackMode") or "orig").lower()
+    dub = str(task.get("DubLang") or "")
+    if mode in ("dub", "dual") and dub:
+        return ("Дубляж %s недоступен для этого видео: возможно, его нет "
+                "или YouTube отдал не все форматы. " % dub.upper()) + text
+    return text
+
+
 def write_cookies_file(txt):
     path = os.path.join(
         os.environ.get("TEMP", tempfile.gettempdir()), "yt_dlp_host_cookies.txt"
@@ -810,7 +821,7 @@ def pump_process(proc, task_id, log_file):
             else:
                 task["Status"] = "error"
                 raw = task.get("LastLine") or "yt-dlp exited with code %s" % code
-                task["Message"] = with_bot_hint(raw)
+                task["Message"] = with_track_hint(with_bot_hint(raw), task)
                 # popup prefers LastLine: put the hint where it is visible
                 task["LastLine"] = task["Message"]
         diag("final id=%s status=%s code=%s" % (task_id, task.get("Status"), code))
