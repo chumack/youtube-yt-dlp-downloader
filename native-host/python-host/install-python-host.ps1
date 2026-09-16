@@ -49,14 +49,18 @@ $manifest = @{
 } | ConvertTo-Json -Depth 4
 Set-Content -LiteralPath $manifestPath -Value $manifest -Encoding UTF8
 
-# 5. register for Chrome, Edge, Vivaldi, Yandex and Chromium fallback
+# 5. register for Chrome, Edge, Brave, Vivaldi, Opera, Yandex and Chromium fallback
 # (HKCU, no admin needed). Vivaldi key verified against prior working setup;
+# Opera also reads the Chrome key, its own keys are added as well;
 # Yandex uses both variants since its exact lookup is undocumented;
 # Chromium/Chrome keys serve as fallback for all Chromium forks.
 $hosts = @(
   "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.fengj.youtube_ytdlp",
   "HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.fengj.youtube_ytdlp",
+  "HKCU\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.fengj.youtube_ytdlp",
   "HKCU\Software\Vivaldi\NativeMessagingHosts\com.fengj.youtube_ytdlp",
+  "HKCU\Software\Opera Software\Opera Stable\NativeMessagingHosts\com.fengj.youtube_ytdlp",
+  "HKCU\Software\Opera Software\NativeMessagingHosts\com.fengj.youtube_ytdlp",
   "HKCU\Software\Chromium\NativeMessagingHosts\com.fengj.youtube_ytdlp",
   "HKCU\Software\Yandex\YandexBrowser\NativeMessagingHosts\com.fengj.youtube_ytdlp",
   "HKCU\Software\Yandex\NativeMessagingHosts\com.fengj.youtube_ytdlp"
@@ -79,5 +83,4 @@ if (-not [string]::IsNullOrWhiteSpace($YtDlpPath)) {
   Write-Host "yt-dlp path:"
   Write-Host $YtDlpPath
 }
-Write-Host "Load the extension from: $(Join-Path (Split-Path $repoRoot -Parent) 'extension')"
-Write-Host "Restart the browser, then reload the extension."
+Write-Host "Load the unpacked extension from the repository root, then restart the browser."

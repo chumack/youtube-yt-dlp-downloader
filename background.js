@@ -81,12 +81,19 @@ async function getAuthToken(interactive = true) {
     throw new Error("Google OAuth Client ID не настроен.");
   }
 
+  // chrome.identity.getAuthToken is a Chrome-only API: other Chromium
+  // browsers (Yandex, Opera, Vivaldi, Brave, Edge) may not implement it.
+  // Downloading does not need it — only the account tab does.
+  if (!chrome.identity?.getAuthToken) {
+    throw new Error("Вход через Google поддерживается только в Chrome. Поиск и загрузка работают без входа.");
+  }
+
   return await chrome.identity.getAuthToken({ interactive });
 }
 
 async function logoutAccount() {
   const token = await getAuthToken(false).catch(() => "");
-  if (token) {
+  if (token && chrome.identity?.removeCachedAuthToken) {
     await chrome.identity.removeCachedAuthToken({ token });
   }
   return { ok: true };
