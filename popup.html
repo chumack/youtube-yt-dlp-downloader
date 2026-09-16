@@ -1,0 +1,175 @@
+﻿<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>YouTube загрузчик · yt-dlp</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main>
+      <header class="appHeader">
+        <span class="mark" aria-hidden="true"></span>
+        <div class="titleBlock">
+          <div class="titleRow">
+            <h1>YouTube</h1>
+            <span id="version" class="version">v0.2.1</span>
+          </div>
+          <p>Загрузчик · локальный yt-dlp</p>
+        </div>
+      </header>
+
+      <nav class="tabs" aria-label="Разделы" role="tablist">
+        <button id="resolveTab" class="tab active" type="button" role="tab" aria-selected="true" aria-controls="resolveView" tabindex="0" data-view="resolve"><span class="tabIcon resolveIcon" aria-hidden="true"></span>Поиск видео</button>
+        <button id="tasksTab" class="tab" type="button" role="tab" aria-selected="false" aria-controls="tasksView" tabindex="-1" data-view="tasks"><span class="tabIcon tasksIcon" aria-hidden="true"></span>Загрузки</button>
+        <button id="accountTab" class="tab" type="button" role="tab" aria-selected="false" aria-controls="accountView" tabindex="-1" data-view="account"><span class="tabIcon accountIcon" aria-hidden="true"></span>Аккаунт</button>
+      </nav>
+
+      <section id="resolveView" class="view active" role="tabpanel" aria-labelledby="resolveTab">
+        <section class="panel">
+          <div class="panelBlock">
+            <div class="blockHead">
+              <div>
+                <strong>Поиск видео</strong>
+                <p>Вставьте ссылку или возьмите открытую страницу YouTube.</p>
+              </div>
+            </div>
+            <div class="sourceActions">
+              <button id="useCurrentPage" type="button" class="ghost actionChip">Текущая страница</button>
+              <button id="clearUrl" type="button" class="ghost actionChip">Очистить</button>
+            </div>
+          </div>
+
+          <div class="fieldRow">
+            <label for="url">Ссылка YouTube</label>
+            <input id="url" type="text" spellcheck="false" aria-describedby="urlHint" placeholder="Вставьте ссылку на видео или плейлист YouTube">
+            <p id="urlHint" class="fieldHint" aria-live="polite">Поддерживаются видео, плейлисты и короткие ссылки youtu.be.</p>
+          </div>
+
+          <div class="fieldRow">
+            <div class="labelRow">
+              <label for="quality">Качество</label>
+              <span class="inlineHint">Формат загрузки</span>
+            </div>
+            <div id="qualityPresets" class="qualityPresets" aria-label="Пресеты качества">
+              <button type="button" class="qualityChip active" data-quality="best-mp4" aria-pressed="true">Лучший MP4</button>
+              <button type="button" class="qualityChip" data-quality="1080" aria-pressed="false">1080p HD</button>
+              <button type="button" class="qualityChip" data-quality="720" aria-pressed="false">720p</button>
+              <button type="button" class="qualityChip" data-quality="480" aria-pressed="false">480p</button>
+              <button type="button" class="qualityChip" data-quality="audio" aria-pressed="false">MP3</button>
+            </div>
+            <select id="quality" class="qualitySelect">
+              <option value="best-mp4">Лучший MP4 одним файлом</option>
+              <option value="1080">До 1080p</option>
+              <option value="720">До 720p</option>
+              <option value="480">До 480p</option>
+              <option value="audio">Только аудио MP3</option>
+            </select>
+            <p class="fieldHint">По умолчанию сохраняется совместимый MP4; аудио можно сохранить отдельно как MP3.</p>
+          </div>
+
+          <details class="advancedSettings">
+            <summary>Дополнительно</summary>
+            <div class="fieldRow compact">
+              <label for="downloadDir">Папка загрузки</label>
+              <input id="downloadDir" type="text" spellcheck="false">
+            </div>
+            <label class="toggleRow" for="useBrowserCookies">
+              <span>
+                <strong>Использовать вход в браузере</strong>
+                <small>Включайте, только если YouTube требует подтвердить вход.</small>
+              </span>
+              <input id="useBrowserCookies" type="checkbox">
+            </label>
+          </details>
+        </section>
+
+        <button id="resolve" type="button" disabled>Найти видео</button>
+        <p id="status" role="status" aria-live="polite" aria-atomic="true">Читаю текущую вкладку…</p>
+
+        <section class="selection">
+          <div class="sectionHead">
+            <div>
+              <h2>Результаты</h2>
+              <p id="resolveSummary">Видео пока не найдены. После поиска выберите, что скачать.</p>
+              <div id="resolveChips" class="summaryChips"></div>
+            </div>
+            <div class="selectionTools">
+              <p id="selectionMeta" class="selectionMeta">Видео не выбраны</p>
+              <label class="selectAll"><input id="selectAll" type="checkbox"> Выбрать все</label>
+            </div>
+          </div>
+          <div class="actionDock">
+            <button id="downloadSelected" type="button" disabled>Добавить к загрузке</button>
+          </div>
+          <div id="videoList" class="videoList"></div>
+        </section>
+      </section>
+
+      <section id="tasksView" class="view" role="tabpanel" aria-labelledby="tasksTab" hidden>
+        <section class="tasks">
+          <div class="tasksHead">
+            <div>
+              <h2>Загрузки</h2>
+              <p>Прогресс, скорость и последний вывод.</p>
+            </div>
+            <button id="refresh" type="button" class="ghost">Обновить</button>
+          </div>
+          <div id="taskSummary" class="summaryChips taskSummary" aria-label="Сводка задач"></div>
+          <section id="taskOverview" class="taskOverview" aria-label="Обзор задач"></section>
+          <div id="tasksList" class="tasksList" role="list" aria-label="Список загрузок"></div>
+        </section>
+      </section>
+
+      <section id="accountView" class="view" role="tabpanel" aria-labelledby="accountTab" hidden>
+        <section class="accountPanel">
+          <div class="sectionHead">
+            <div>
+              <h2>Аккаунт YouTube</h2>
+              <p id="accountStatus" role="status" aria-live="polite" aria-atomic="true">Необязательно: чтение плейлистов, понравившихся и недавних видео.</p>
+            </div>
+            <button id="logoutAccount" type="button" class="ghost" hidden>Выйти</button>
+          </div>
+          <button id="loginAccount" type="button" class="secondary">Войти в YouTube</button>
+          <div class="noticeBar">
+            <span class="noticeIcon" aria-hidden="true"></span>
+            <p>Авторизация необязательна: поиск и загрузка работают без входа.</p>
+          </div>
+          <div id="accountSummary" class="accountSummary"></div>
+        </section>
+
+        <section class="accountList">
+          <div class="sectionHead">
+            <div>
+              <h2>Недавние</h2>
+              <p class="sectionSubtext">Недавно открытые видео YouTube из истории браузера.</p>
+            </div>
+            <button id="loadAccount" type="button" class="ghost">Обновить</button>
+          </div>
+          <div id="recentList" class="compactList" role="list" aria-label="Список недавних"></div>
+        </section>
+
+        <section class="accountList">
+          <div class="sectionHead">
+            <div>
+              <h2>Понравившиеся</h2>
+              <p class="sectionSubtext">После входа здесь будут понравившиеся видео для быстрого поиска.</p>
+            </div>
+          </div>
+          <div id="likedList" class="compactList" role="list" aria-label="Список понравившихся"></div>
+        </section>
+
+        <section class="accountList">
+          <div class="sectionHead">
+            <div>
+              <h2>Плейлисты / Избранное</h2>
+              <p class="sectionSubtext">Отправляйте подборки, избранное и «Смотреть позже» прямо в поиск.</p>
+            </div>
+          </div>
+          <div id="playlistList" class="compactList" role="list" aria-label="Список плейлистов и избранного"></div>
+        </section>
+      </section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
