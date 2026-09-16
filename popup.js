@@ -182,8 +182,21 @@ async function sendAccount(payload) {
 }
 
 async function getActiveTabUrl() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  return tab?.url || "";
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const url = tab?.url || "";
+    // В отдельном окне текущая вкладка — сам попап (chrome-extension://...).
+    // Тогда ищем YouTube-вкладку в обычных окнах браузера.
+    if (!url.startsWith("chrome-extension://")) {
+      return url;
+    }
+    const tabs = await chrome.tabs.query({});
+    const yt = (tabs || []).filter(t => t?.url && isYouTubeUrl(t.url));
+    const active = yt.find(t => t.active);
+    return (active || yt[0])?.url || "";
+  } catch {
+    return "";
+  }
 }
 
 function isYouTubeUrl(value) {
