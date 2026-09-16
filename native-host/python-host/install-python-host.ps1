@@ -38,6 +38,11 @@ if ([string]::IsNullOrWhiteSpace($YtDlpPath)) {
   }
 }
 
+# 3b. the launcher runs host.py via pythonw.exe/python.exe on PATH at runtime
+if (-not (Get-Command pythonw.exe -ErrorAction SilentlyContinue) -and -not (Get-Command python.exe -ErrorAction SilentlyContinue)) {
+  Write-Warning "Neither pythonw.exe nor python.exe was found in PATH. The host will fail at runtime. Install Python 3.8+ (tick 'Add python.exe to PATH') or set the YTDLP_HOST_PYTHON environment variable to python.exe."
+}
+
 # 4. manifest
 $manifestPath = Join-Path $PublishDir "com.fengj.youtube_ytdlp.json"
 $manifest = @{

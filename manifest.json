@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YouTube yt-dlp Downloader",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Загрузчик YouTube на yt-dlp.",
   "author": "fengjunda888",
   "homepage_url": "https://github.com/fengjunda888/youtube-download-extension",

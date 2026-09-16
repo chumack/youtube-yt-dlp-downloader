@@ -33,7 +33,11 @@
 
 ## 2. Установка native-хоста (Windows)
 
-Вариант Python — без компиляции, регистрирует хост сразу во всех браузерах:
+Проще всего — двойной клик по `Install-NativeHost.bat`: если найден .NET 8 SDK,
+соберёт и поставит C#-хост, иначе поставит Python-хост (нужны только
+Python 3.8+ и `yt-dlp`, компиляция не требуется).
+
+Вручную, вариант Python (рекомендуется при отсутствии .NET SDK):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\native-host\python-host\install-python-host.ps1
