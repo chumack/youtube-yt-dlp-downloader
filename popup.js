@@ -4,11 +4,15 @@ const downloadDirStorageKey = "ytDlpDownloadDir";
 const urlInput = document.getElementById("url");
 const downloadDirInput = document.getElementById("downloadDir");
 const qualityInput = document.getElementById("quality");
+const codecInput = document.getElementById("vcodec");
 const useBrowserCookiesInput = document.getElementById("useBrowserCookies");
 const useCurrentPageButton = document.getElementById("useCurrentPage");
 const clearUrlButton = document.getElementById("clearUrl");
 const qualityChips = [...document.querySelectorAll(".qualityChip")];
+const codecChips = [...document.querySelectorAll(".codecChip")];
 const cookiesStorageKey = "ytDlpUseCookies";
+const codecStorageKey = "ytDlpVcodec";
+const qualityStorageKey = "ytDlpQuality";
 const statusText = document.getElementById("status");
 const resolveButton = document.getElementById("resolve");
 const downloadSelectedButton = document.getElementById("downloadSelected");
@@ -59,6 +63,7 @@ const previewTasks = [
     status: "running",
     percent: 64.3,
     quality: "1080",
+    vcodec: "avc",
     playlistMode: "single",
     speed: "5.2MiB/s",
     eta: "00:18",
@@ -68,7 +73,8 @@ const previewTasks = [
     id: "demo-done",
     status: "done",
     percent: 100,
-    quality: "audio",
+    quality: "audio-mp3",
+    vcodec: "auto",
     playlistMode: "single",
     speed: "",
     eta: "",
@@ -174,12 +180,46 @@ function updateResolveButton() {
   resolveButton.disabled = !urlInput.value.trim();
 }
 
+function normalizeQuality(value) {
+  // Backward compat: старый пресет "audio" = MP3.
+  if (value === "audio") return "audio-mp3";
+  return value || "best-mp4";
+}
+
+function isAudioQuality(value) {
+  return normalizeQuality(value).startsWith("audio-");
+}
+
 function syncQualityChips() {
+  qualityInput.value = normalizeQuality(qualityInput.value);
   qualityChips.forEach(chip => {
     const active = chip.dataset.quality === qualityInput.value;
     chip.classList.toggle("active", active);
     chip.setAttribute("aria-pressed", active ? "true" : "false");
   });
+  syncCodecChips();
+}
+
+function syncCodecChips() {
+  if (codecInput) {
+    codecInput.value = codecInput.value || "auto";
+  }
+  const audio = isAudioQuality(qualityInput.value);
+  codecChips.forEach(chip => {
+    const active = chip.dataset.codec === (codecInput?.value || "auto");
+    chip.classList.toggle("active", active);
+    chip.setAttribute("aria-pressed", active ? "true" : "false");
+    chip.disabled = audio;
+    chip.title = audio ? "Кодек применяется только к видео" : "";
+  });
+  if (codecInput) {
+    codecInput.disabled = audio;
+  }
+}
+
+function getVcodec() {
+  const v = codecInput?.value || "auto";
+  return isAudioQuality(qualityInput.value) ? "auto" : v;
 }
 
 function cleanCookieField(value) {
@@ -230,6 +270,8 @@ async function resolveCurrentUrl() {
 
   localStorage.setItem(downloadDirStorageKey, getDownloadDir());
   localStorage.setItem(cookiesStorageKey, useBrowserCookiesInput.checked ? "1" : "0");
+  localStorage.setItem(qualityStorageKey, normalizeQuality(qualityInput.value));
+  localStorage.setItem(codecStorageKey, codecInput?.value || "auto");
   resolveButton.disabled = true;
   setStatus("Разбираю ссылку…", "busy");
   renderVideos([]);
@@ -266,6 +308,8 @@ async function downloadSelectedVideos() {
 
   localStorage.setItem(downloadDirStorageKey, downloadDir);
   localStorage.setItem(cookiesStorageKey, useBrowserCookiesInput.checked ? "1" : "0");
+  localStorage.setItem(qualityStorageKey, quality);
+  localStorage.setItem(codecStorageKey, vcodec);
   downloadSelectedButton.disabled = true;
   setStatus(`Добавляю задач: ${selected.length}…`, "busy");
 
@@ -282,13 +326,16 @@ async function downloadSelectedVideos() {
 
   let successCount = 0;
   let lastError = "";
+  const quality = normalizeQuality(qualityInput.value);
+  const vcodec = getVcodec();
   for (const video of selected) {
     try {
       await sendNative({
         action: "start",
         url: video.url,
         downloadDir,
-        quality: qualityInput.value,
+        quality,
+        vcodec,
         playlistMode: "single",
         ...(cookiesTxt ? { useBrowserCookies: true, cookiesTxt } : {})
       });
@@ -392,7 +439,7 @@ function renderVideos(videos) {
   resolveSummary.textContent = `Всего видео: ${videos.length}. Можно выбрать одно или несколько.`;
   resolveChips.innerHTML = `
     <span>Видео: ${videos.length}</span>
-    <span>${escapeHtml(qualityText(qualityInput.value))}</span>
+    <span>${escapeHtml(fullFormatText(qualityInput.value, getVcodec()))}</span>
     <span>Папка задана</span>
   `;
   videoList.innerHTML = videos.map((video, index) => `
@@ -435,6 +482,7 @@ function renderTasks(tasks) {
     const eta = task.Eta || task.eta || "";
     const speed = task.Speed || task.speed || "";
     const quality = task.Quality || task.quality || "";
+    const vcodec = task.Vcodec || task.vcodec || "auto";
     const canCancel = status === "running" || status === "starting";
 
     return `
@@ -444,7 +492,7 @@ function renderTasks(tasks) {
           <span>${percent.toFixed(percent ? 1 : 0)}%</span>
         </div>
         <div class="bar"><span style="width:${percent}%"></span></div>
-        <div class="meta">${escapeHtml(qualityText(quality))}${speed ? ` · ${escapeHtml(speed)}` : ""}${eta ? ` · ETA ${escapeHtml(eta)}` : ""}</div>
+        <div class="meta">${escapeHtml(fullFormatText(quality, vcodec))}${speed ? ` · ${escapeHtml(speed)}` : ""}${eta ? ` · ETA ${escapeHtml(eta)}` : ""}</div>
         <div class="line">${escapeHtml(line)}</div>
         <div class="taskActions">
           <button class="ghost small" data-cancel="${escapeHtml(id)}" ${canCancel ? "" : "disabled"}>Отмена</button>
@@ -560,12 +608,42 @@ function statusTextFor(status) {
 
 function qualityText(value) {
   return {
+    "best": "Лучшее доступное",
     "best-mp4": "Лучший MP4 одним файлом",
-    "1080": "До 1080p",
-    "720": "До 720p",
-    "480": "До 480p",
-    audio: "Только аудио MP3"
-  }[value] || value;
+    "4320": "Видео до 4320p 8K",
+    "2160": "Видео до 2160p 4K",
+    "1440": "Видео до 1440p 2K",
+    "1080": "Видео до 1080p",
+    "720": "Видео до 720p",
+    "480": "Видео до 480p",
+    "360": "Видео до 360p",
+    "240": "Видео до 240p",
+    "144": "Видео до 144p",
+    "audio": "Только аудио MP3",
+    "audio-mp3": "Только аудио MP3",
+    "audio-m4a": "Только аудио M4A",
+    "audio-opus": "Только аудио Opus",
+    "audio-wav": "Только аудио WAV",
+    "audio-best": "Аудио оригинал"
+  }[normalizeQuality(value)] || value;
+}
+
+function codecText(value) {
+  return {
+    auto: "Авто кодек",
+    av1: "AV1",
+    vp9: "VP9",
+    avc: "AVC/H.264"
+  }[value || "auto"] || value;
+}
+
+function fullFormatText(quality, vcodec) {
+  const q = normalizeQuality(quality);
+  if (isAudioQuality(q)) {
+    return qualityText(q);
+  }
+  const vc = vcodec && vcodec !== "auto" ? ` · ${codecText(vcodec)}` : "";
+  return `${qualityText(q)}${vc}`;
 }
 
 function escapeHtml(value) {
@@ -588,6 +666,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   const savedDir = localStorage.getItem(downloadDirStorageKey);
   downloadDirInput.value = savedDir || defaultDownloadDir;
   useBrowserCookiesInput.checked = localStorage.getItem(cookiesStorageKey) === "1";
+  const savedQuality = normalizeQuality(localStorage.getItem(qualityStorageKey) || qualityInput.value);
+  if ([...qualityInput.options].some(o => o.value === savedQuality)) {
+    qualityInput.value = savedQuality;
+  }
+  if (codecInput) {
+    const savedCodec = localStorage.getItem(codecStorageKey) || "auto";
+    if ([...codecInput.options].some(o => o.value === savedCodec)) {
+      codecInput.value = savedCodec;
+    }
+  }
   syncQualityChips();
 
   if (previewMode) {
@@ -630,9 +718,23 @@ clearUrlButton.addEventListener("click", () => {
 });
 qualityChips.forEach(chip => chip.addEventListener("click", () => {
   qualityInput.value = chip.dataset.quality;
+  localStorage.setItem(qualityStorageKey, normalizeQuality(qualityInput.value));
   syncQualityChips();
 }));
-qualityInput.addEventListener("change", syncQualityChips);
+qualityInput.addEventListener("change", () => {
+  localStorage.setItem(qualityStorageKey, normalizeQuality(qualityInput.value));
+  syncQualityChips();
+});
+codecChips.forEach(chip => chip.addEventListener("click", () => {
+  if (chip.disabled) return;
+  if (codecInput) codecInput.value = chip.dataset.codec;
+  localStorage.setItem(codecStorageKey, chip.dataset.codec);
+  syncCodecChips();
+}));
+codecInput?.addEventListener("change", () => {
+  localStorage.setItem(codecStorageKey, codecInput.value);
+  syncCodecChips();
+});
 useBrowserCookiesInput.addEventListener("change", () => {
   localStorage.setItem(cookiesStorageKey, useBrowserCookiesInput.checked ? "1" : "0");
 });

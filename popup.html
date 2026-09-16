@@ -13,7 +13,7 @@
         <div class="titleBlock">
           <div class="titleRow">
             <h1>YouTube</h1>
-            <span id="version" class="version">v0.2.1</span>
+            <span id="version" class="version">v0.3.0</span>
           </div>
           <p>Загрузчик · локальный yt-dlp</p>
         </div>
@@ -48,24 +48,63 @@
 
           <div class="fieldRow">
             <div class="labelRow">
-              <label for="quality">Качество</label>
-              <span class="inlineHint">Формат загрузки</span>
+              <label for="quality">Формат загрузки</label>
+              <span class="inlineHint">Видео · Аудио · Кодек</span>
             </div>
-            <div id="qualityPresets" class="qualityPresets" aria-label="Пресеты качества">
+            <div class="subLabel">Видео</div>
+            <div id="qualityPresets" class="qualityPresets" aria-label="Пресеты качества видео">
               <button type="button" class="qualityChip active" data-quality="best-mp4" aria-pressed="true">Лучший MP4</button>
+              <button type="button" class="qualityChip" data-quality="best" aria-pressed="false">Лучшее</button>
+              <button type="button" class="qualityChip" data-quality="4320" aria-pressed="false">8K 4320p</button>
+              <button type="button" class="qualityChip" data-quality="2160" aria-pressed="false">4K 2160p</button>
+              <button type="button" class="qualityChip" data-quality="1440" aria-pressed="false">2K 1440p</button>
               <button type="button" class="qualityChip" data-quality="1080" aria-pressed="false">1080p HD</button>
               <button type="button" class="qualityChip" data-quality="720" aria-pressed="false">720p</button>
               <button type="button" class="qualityChip" data-quality="480" aria-pressed="false">480p</button>
-              <button type="button" class="qualityChip" data-quality="audio" aria-pressed="false">MP3</button>
+              <button type="button" class="qualityChip" data-quality="360" aria-pressed="false">360p</button>
+              <button type="button" class="qualityChip" data-quality="240" aria-pressed="false">240p</button>
+              <button type="button" class="qualityChip" data-quality="144" aria-pressed="false">144p</button>
+            </div>
+            <div class="subLabel">Аудио</div>
+            <div class="qualityPresets" aria-label="Пресеты аудио">
+              <button type="button" class="qualityChip" data-quality="audio-mp3" aria-pressed="false">MP3</button>
+              <button type="button" class="qualityChip" data-quality="audio-m4a" aria-pressed="false">M4A</button>
+              <button type="button" class="qualityChip" data-quality="audio-opus" aria-pressed="false">Opus</button>
+              <button type="button" class="qualityChip" data-quality="audio-wav" aria-pressed="false">WAV</button>
+              <button type="button" class="qualityChip" data-quality="audio-best" aria-pressed="false">Оригинал</button>
             </div>
             <select id="quality" class="qualitySelect">
               <option value="best-mp4">Лучший MP4 одним файлом</option>
-              <option value="1080">До 1080p</option>
-              <option value="720">До 720p</option>
-              <option value="480">До 480p</option>
-              <option value="audio">Только аудио MP3</option>
+              <option value="best">Лучшее доступное (авто высота)</option>
+              <option value="4320">Видео до 4320p 8K</option>
+              <option value="2160">Видео до 2160p 4K</option>
+              <option value="1440">Видео до 1440p 2K</option>
+              <option value="1080">Видео до 1080p</option>
+              <option value="720">Видео до 720p</option>
+              <option value="480">Видео до 480p</option>
+              <option value="360">Видео до 360p</option>
+              <option value="240">Видео до 240p</option>
+              <option value="144">Видео до 144p</option>
+              <option value="audio-mp3">Только аудио MP3</option>
+              <option value="audio-m4a">Только аудио M4A (AAC)</option>
+              <option value="audio-opus">Только аудио Opus</option>
+              <option value="audio-wav">Только аудио WAV</option>
+              <option value="audio-best">Только аудио оригинал без конвертации</option>
             </select>
-            <p class="fieldHint">По умолчанию сохраняется совместимый MP4; аудио можно сохранить отдельно как MP3.</p>
+            <div class="subLabel">Кодек видео</div>
+            <div id="codecPresets" class="qualityPresets" aria-label="Выбор кодека видео">
+              <button type="button" class="codecChip active" data-codec="auto" aria-pressed="true">Авто</button>
+              <button type="button" class="codecChip" data-codec="av1" aria-pressed="false">AV1</button>
+              <button type="button" class="codecChip" data-codec="vp9" aria-pressed="false">VP9</button>
+              <button type="button" class="codecChip" data-codec="avc" aria-pressed="false">AVC/H.264</button>
+            </div>
+            <select id="vcodec" class="qualitySelect">
+              <option value="auto">Кодек: авто</option>
+              <option value="av1">Кодек: AV1</option>
+              <option value="vp9">Кодек: VP9</option>
+              <option value="avc">Кодек: AVC / H.264</option>
+            </select>
+            <p class="fieldHint">Видео собирается из лучших дорожек YouTube до выбранной высоты и сводится в MP4. AV1/VP9 дают 4K/8K, AVC — максимальную совместимость. Аудио извлекается через ffmpeg.</p>
           </div>
 
           <details class="advancedSettings">
