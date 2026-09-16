@@ -433,7 +433,8 @@ def vcodec_filter(vcodec):
     if vcodec == "av1":
         return "[vcodec^=av01]"
     if vcodec == "vp9":
-        return "[vcodec^=vp09]"
+        # YouTube отдаёт VP9 то как "vp09.xx.xx.xx", то как короткий "vp9".
+        return "[vcodec^=vp]"
     if vcodec == "avc":
         return "[vcodec^=avc1]"
     return ""

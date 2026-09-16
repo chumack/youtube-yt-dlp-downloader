@@ -466,7 +466,8 @@ static string NormalizeVcodec(string? value)
 static string VcodecFilter(string vcodec) => vcodec switch
 {
   "av1" => "[vcodec^=av01]",
-  "vp9" => "[vcodec^=vp09]",
+  // YouTube отдаёт VP9 то как "vp09.xx.xx.xx", то как короткий "vp9".
+  "vp9" => "[vcodec^=vp]",
   "avc" => "[vcodec^=avc1]",
   _ => ""
 };
