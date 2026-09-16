@@ -306,6 +306,8 @@ async function downloadSelectedVideos() {
     return;
   }
 
+  const quality = normalizeQuality(qualityInput.value);
+  const vcodec = getVcodec();
   localStorage.setItem(downloadDirStorageKey, downloadDir);
   localStorage.setItem(cookiesStorageKey, useBrowserCookiesInput.checked ? "1" : "0");
   localStorage.setItem(qualityStorageKey, quality);
@@ -326,8 +328,6 @@ async function downloadSelectedVideos() {
 
   let successCount = 0;
   let lastError = "";
-  const quality = normalizeQuality(qualityInput.value);
-  const vcodec = getVcodec();
   for (const video of selected) {
     try {
       await sendNative({
