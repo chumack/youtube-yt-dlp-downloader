@@ -385,6 +385,28 @@ button.small {
   font-size: 12px;
 }
 
+.tasksActions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+  align-self: flex-start;
+}
+
+button.iconBtn {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  margin-top: 0;
+  padding: 0;
+  flex: 0 0 auto;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.appHeader .iconBtn {
+  align-self: center;
+}
+
 .view {
   display: none;
 }

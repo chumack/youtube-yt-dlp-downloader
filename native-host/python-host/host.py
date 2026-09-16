@@ -868,6 +868,27 @@ def action_list():
     return {"ok": True, "tasks": ordered}
 
 
+def action_clear(root):
+    """Удаляет завершённые задачи (done/error/canceled) из памяти.
+
+    Активные (starting/running) не трогаем. Файлы на диске остаются.
+    """
+    removed = 0
+    with tasks_lock:
+        finished = [tid for tid, t in tasks.items()
+                    if t.get("Status") in ("done", "error", "canceled")]
+        for tid in finished:
+            del tasks[tid]
+            removed += 1
+        ordered = sorted(
+            (dict(t) for t in tasks.values()),
+            key=lambda t: t.get("StartedAt", ""),
+            reverse=True,
+        )
+    diag("clear removed=%d left=%d" % (removed, len(ordered)))
+    return {"ok": True, "removed": removed, "tasks": ordered}
+
+
 def action_cancel(root):
     task_id = root.get("id")
     with tasks_lock:
@@ -914,6 +935,8 @@ def main():
                 payload = action_list()
             elif action == "cancel":
                 payload = action_cancel(root)
+            elif action == "clear":
+                payload = action_clear(root)
             else:
                 payload = {"ok": False, "error": "Unknown action."}
             write_response(with_request_id(request_id, payload))

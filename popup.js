@@ -34,6 +34,8 @@ const statusText = document.getElementById("status");
 const resolveButton = document.getElementById("resolve");
 const downloadSelectedButton = document.getElementById("downloadSelected");
 const refreshButton = document.getElementById("refresh");
+const clearTasksButton = document.getElementById("clearTasks");
+const detachWindowButton = document.getElementById("detachWindow");
 const tasksList = document.getElementById("tasksList");
 const taskSummary = document.getElementById("taskSummary");
 const videoList = document.getElementById("videoList");
@@ -531,6 +533,49 @@ async function cancelTask(id) {
   }
 }
 
+function updateClearButton(tasks) {
+  if (!clearTasksButton) {
+    return;
+  }
+  clearTasksButton.disabled = !tasks.some(task =>
+    ["done", "error", "canceled"].includes(task.Status || task.status));
+}
+
+async function clearFinishedTasks() {
+  if (clearTasksButton) {
+    clearTasksButton.disabled = true;
+  }
+  try {
+    const ok = typeof confirm === "function"
+      ? confirm("Удалить завершённые загрузки из списка? Скачанные файлы на диске останутся.")
+      : true;
+    if (!ok) {
+      return;
+    }
+    await sendNative({ action: "clear" });
+    await refreshTasks();
+  } catch (error) {
+    tasksList.innerHTML = emptyState("Не удалось очистить", error.message, "error");
+  }
+}
+
+async function openDetachedWindow() {
+  try {
+    if (!chrome.windows?.create || !chrome.runtime?.getURL) {
+      throw new Error("unsupported");
+    }
+    await chrome.windows.create({
+      url: chrome.runtime.getURL("popup.html"),
+      type: "popup",
+      width: 520,
+      height: 720,
+      focused: true
+    });
+  } catch (error) {
+    setStatus("Отдельное окно не поддерживается этим браузером.", "error");
+  }
+}
+
 function startPolling() {
   if (pollTimer) {
     clearInterval(pollTimer);
@@ -617,6 +662,7 @@ function renderVideos(videos) {
 }
 
 function renderTasks(tasks) {
+  updateClearButton(tasks);
   if (!tasks.length) {
     taskSummary.innerHTML = "";
     tasksList.innerHTML = emptyState("Нет загрузок", "Найдите видео и добавьте выбранное — оно появится здесь.");
@@ -957,6 +1003,8 @@ useBrowserCookiesInput.addEventListener("change", () => {
 });
 downloadSelectedButton.addEventListener("click", downloadSelectedVideos);
 refreshButton.addEventListener("click", refreshTasks);
+clearTasksButton?.addEventListener("click", clearFinishedTasks);
+detachWindowButton?.addEventListener("click", openDetachedWindow);
 loginAccountButton.addEventListener("click", loadAccountData);
 loadAccountButton.addEventListener("click", loadAccountData);
 logoutAccountButton.addEventListener("click", logoutAccount);

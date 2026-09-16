@@ -37,6 +37,9 @@ while (true)
       case "cancel":
         WriteResponse(output, outputLock, WithRequestId(requestId, CancelDownload(root, tasks)));
         break;
+      case "clear":
+        WriteResponse(output, outputLock, WithRequestId(requestId, ClearDownloads(tasks)));
+        break;
       default:
         WriteResponse(output, outputLock, WithRequestId(requestId, new { ok = false, error = "Unknown action." }));
         break;
@@ -370,6 +373,20 @@ static object CancelDownload(JsonElement root, ConcurrentDictionary<string, Down
   {
     return new { ok = false, error = ex.Message, task };
   }
+}
+
+static object ClearDownloads(ConcurrentDictionary<string, DownloadTask> tasks)
+{
+  var removed = 0;
+  foreach (var (id, task) in tasks.ToArray())
+  {
+    if (task.Status is "done" or "error" or "canceled" && tasks.TryRemove(id, out _))
+    {
+      removed++;
+    }
+  }
+  var left = tasks.Values.OrderByDescending(t => t.StartedAt).ToArray();
+  return new { ok = true, removed, tasks = left };
 }
 
 static async Task PumpProcessAsync(Process process, DownloadTask task)
