@@ -60,6 +60,10 @@ static object StartDownload(JsonElement root, ConcurrentDictionary<string, Downl
   var playlistMode = root.TryGetProperty("playlistMode", out var playlistProp) ? playlistProp.GetString() : "single";
   var quality = NormalizeQuality(root.TryGetProperty("quality", out var qualityProp) ? qualityProp.GetString() : "best-mp4");
   var vcodec = NormalizeVcodec(root.TryGetProperty("vcodec", out var vcodecProp) ? vcodecProp.GetString() : "auto");
+  var abitrate = NormalizeAbitrate(root.TryGetProperty("abitrate", out var abitrateProp) ? abitrateProp.GetString() : "0");
+  var trackMode = NormalizeTrackMode(root.TryGetProperty("trackMode", out var trackModeProp) ? trackModeProp.GetString() : "orig");
+  var dubLang = NormalizeLang(root.TryGetProperty("dubLang", out var dubLangProp) ? dubLangProp.GetString() : "");
+  var origLang = NormalizeLang(root.TryGetProperty("origLang", out var origLangProp) ? origLangProp.GetString() : "");
   var targetDir = ResolveDownloadDir(downloadDir);
   var logDir = Path.Combine(targetDir, "yt-dlp-logs");
   Directory.CreateDirectory(logDir);
@@ -74,6 +78,9 @@ static object StartDownload(JsonElement root, ConcurrentDictionary<string, Downl
     DownloadDir = targetDir,
     Quality = quality,
     Vcodec = vcodec,
+    Abitrate = abitrate,
+    TrackMode = trackMode,
+    DubLang = dubLang,
     PlaylistMode = playlistMode ?? "single",
     LogFile = logFile,
     Status = "starting",
@@ -81,7 +88,8 @@ static object StartDownload(JsonElement root, ConcurrentDictionary<string, Downl
   };
   tasks[id] = task;
 
-  var args = BuildYtDlpArgs(url, outputTemplate, task.Quality, task.PlaylistMode, task.Vcodec);
+  var args = BuildYtDlpArgs(url, outputTemplate, task.Quality, task.PlaylistMode, task.Vcodec,
+    task.Abitrate, task.TrackMode, task.DubLang, origLang);
   var psi = new ProcessStartInfo
   {
     FileName = ResolveYtDlpPath(),
@@ -112,14 +120,8 @@ static object StartDownload(JsonElement root, ConcurrentDictionary<string, Downl
   }
 }
 
-static object ResolveVideos(JsonElement root)
+static JsonDocument DumpInfoJson(string url, bool flat)
 {
-  var url = root.GetProperty("url").GetString() ?? "";
-  if (!IsYouTubeUrl(url))
-  {
-    return new { ok = false, error = "Only YouTube URLs are supported." };
-  }
-
   var psi = new ProcessStartInfo
   {
     FileName = ResolveYtDlpPath(),
@@ -129,38 +131,92 @@ static object ResolveVideos(JsonElement root)
     CreateNoWindow = true
   };
 
-  foreach (var arg in new[]
+  psi.ArgumentList.Add("--ignore-config");
+  psi.ArgumentList.Add("--dump-single-json");
+  if (flat)
   {
-    "--ignore-config",
-    "--dump-single-json",
-    "--flat-playlist",
-    "--skip-download",
-    "--no-warnings",
-    url
-  })
+    psi.ArgumentList.Add("--flat-playlist");
+  }
+  psi.ArgumentList.Add("--skip-download");
+  psi.ArgumentList.Add("--no-warnings");
+  psi.ArgumentList.Add(url);
+
+  using var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start yt-dlp.");
+  var stdoutTask = process.StandardOutput.ReadToEndAsync();
+  var stderrTask = process.StandardError.ReadToEndAsync();
+  if (!process.WaitForExit(60000))
   {
-    psi.ArgumentList.Add(arg);
+    process.Kill(entireProcessTree: true);
+    throw new TimeoutException("Timed out while resolving the URL.");
+  }
+
+  var stdout = stdoutTask.GetAwaiter().GetResult();
+  var stderr = stderrTask.GetAwaiter().GetResult();
+  if (process.ExitCode != 0)
+  {
+    throw new InvalidOperationException(string.IsNullOrWhiteSpace(stderr) ? $"yt-dlp exited with code {process.ExitCode}" : stderr.Trim());
+  }
+
+  return JsonDocument.Parse(stdout);
+}
+
+static (List<AudioTrack> Tracks, string OrigLang) ExtractAudioTracks(JsonElement info)
+{
+  var videoLang = NormalizeLang(GetString(info, "language"));
+  var byLang = new Dictionary<string, (string Label, string Note)>(StringComparer.OrdinalIgnoreCase);
+  if (info.TryGetProperty("formats", out var formats) && formats.ValueKind == JsonValueKind.Array)
+  {
+    foreach (var f in formats.EnumerateArray())
+    {
+      if (f.ValueKind != JsonValueKind.Object)
+      {
+        continue;
+      }
+      if (GetString(f, "vcodec") != "none" || GetString(f, "acodec") == "none")
+      {
+        continue;
+      }
+      var lang = NormalizeLang(GetString(f, "language"));
+      if (string.IsNullOrEmpty(lang) || byLang.ContainsKey(lang))
+      {
+        continue;
+      }
+      var note = GetString(f, "format_note") ?? "";
+      byLang[lang] = (string.IsNullOrWhiteSpace(note) ? lang : note, note);
+    }
+  }
+
+  var tracks = new List<AudioTrack>();
+  var origLang = "";
+  foreach (var (lang, (label, note)) in byLang)
+  {
+    var isOrig = (!string.IsNullOrEmpty(videoLang) && lang.Equals(videoLang, StringComparison.OrdinalIgnoreCase))
+      || note.Contains("original", StringComparison.OrdinalIgnoreCase);
+    if (isOrig && string.IsNullOrEmpty(origLang))
+    {
+      origLang = lang;
+    }
+    tracks.Add(new AudioTrack { Lang = lang, Label = label, Original = isOrig });
+  }
+  tracks.Sort((a, b) =>
+  {
+    var c = b.Original.CompareTo(a.Original);
+    return c != 0 ? c : string.Compare(a.Lang, b.Lang, StringComparison.OrdinalIgnoreCase);
+  });
+  return (tracks, origLang);
+}
+
+static object ResolveVideos(JsonElement root)
+{
+  var url = root.GetProperty("url").GetString() ?? "";
+  if (!IsYouTubeUrl(url))
+  {
+    return new { ok = false, error = "Only YouTube URLs are supported." };
   }
 
   try
   {
-    using var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start yt-dlp.");
-    var stdoutTask = process.StandardOutput.ReadToEndAsync();
-    var stderrTask = process.StandardError.ReadToEndAsync();
-    if (!process.WaitForExit(60000))
-    {
-      process.Kill(entireProcessTree: true);
-      return new { ok = false, error = "Timed out while resolving the URL." };
-    }
-
-    var stdout = stdoutTask.GetAwaiter().GetResult();
-    var stderr = stderrTask.GetAwaiter().GetResult();
-    if (process.ExitCode != 0)
-    {
-      return new { ok = false, error = string.IsNullOrWhiteSpace(stderr) ? $"yt-dlp exited with code {process.ExitCode}" : stderr.Trim() };
-    }
-
-    using var doc = JsonDocument.Parse(stdout);
+    using var doc = DumpInfoJson(url, flat: true);
     var rootJson = doc.RootElement;
     var title = GetString(rootJson, "title");
     var sourceType = rootJson.TryGetProperty("entries", out var entries) && entries.ValueKind == JsonValueKind.Array ? "playlist" : "video";
@@ -203,7 +259,23 @@ static object ResolveVideos(JsonElement root)
       });
     }
 
-    return new { ok = true, title = title ?? url, sourceType, count = videos.Count, videos };
+    // Single video: second pass reads full formats for audio tracks (dub languages).
+    // A failure here must not fail the whole resolve.
+    var tracks = new List<AudioTrack>();
+    var origLang = "";
+    if (sourceType == "video")
+    {
+      try
+      {
+        using var full = DumpInfoJson(url, flat: false);
+        (tracks, origLang) = ExtractAudioTracks(full.RootElement);
+      }
+      catch
+      {
+      }
+    }
+
+    return new { ok = true, title = title ?? url, sourceType, count = videos.Count, videos, audioTracks = tracks, origLang };
   }
   catch (Exception ex)
   {
@@ -396,33 +468,131 @@ static int? QualityHeight(string quality) => quality switch
   _ => null
 };
 
-static string[] BuildYtDlpArgs(string url, string outputTemplate, string quality, string playlistMode, string vcodec = "auto")
+static string NormalizeAbitrate(string? value)
+{
+  var v = (value ?? "0").Trim().ToUpperInvariant();
+  if (v.EndsWith("K") && v.Length > 1 && v[..^1].All(char.IsDigit))
+  {
+  }
+  else if (v.All(char.IsDigit) && v != "0")
+  {
+    v += "K";
+  }
+  return v is "0" or "64K" or "96K" or "128K" or "192K" or "256K" or "320K" ? v : "0";
+}
+
+static string NormalizeTrackMode(string? value)
+{
+  var v = (value ?? "orig").Trim().ToLowerInvariant();
+  return v is "orig" or "dub" or "dual" ? v : "orig";
+}
+
+static string NormalizeLang(string? value)
+{
+  var v = (value ?? "").Trim();
+  if (string.IsNullOrEmpty(v))
+  {
+    return "";
+  }
+  var parts = v.Split('-');
+  if (parts.Length == 0 || parts[0].Length < 2 || parts[0].Length > 3 || !parts[0].All(char.IsLetter))
+  {
+    return "";
+  }
+  for (var i = 1; i < parts.Length; i++)
+  {
+    if (parts[i].Length == 0 || !parts[i].All(char.IsLetter))
+    {
+      return "";
+    }
+  }
+  return string.Join("-", new[] { parts[0].ToLowerInvariant() }.Concat(parts.Skip(1)));
+}
+
+static string[] BuildYtDlpArgs(string url, string outputTemplate, string quality, string playlistMode, string vcodec = "auto",
+  string abitrate = "0", string trackMode = "orig", string dubLang = "", string origLang = "")
 {
   quality = NormalizeQuality(quality);
   vcodec = NormalizeVcodec(vcodec);
-  if (quality.StartsWith("audio-")) vcodec = "auto";
+  var isAudio = quality.StartsWith("audio-");
+  if (isAudio) vcodec = "auto";
   var codec = VcodecFilter(vcodec);
+
+  abitrate = NormalizeAbitrate(abitrate);
+  trackMode = NormalizeTrackMode(trackMode);
+  dubLang = NormalizeLang(dubLang);
+  origLang = NormalizeLang(origLang);
+  // "Лучший MP4 одним файлом" — всегда оригинал; dual для аудио
+  // невозможен — скачиваем дубляж отдельно.
+  if (quality == "best-mp4")
+  {
+    trackMode = "orig";
+  }
+  if (isAudio && trackMode == "dual")
+  {
+    trackMode = "dub";
+  }
+  if ((trackMode == "dub" || trackMode == "dual") && string.IsNullOrEmpty(dubLang))
+  {
+    trackMode = "orig";
+  }
+
+  var dubF = (trackMode == "dub" || trackMode == "dual") ? $"[language={dubLang}]" : "";
+  var origF = (trackMode == "dual" && !string.IsNullOrEmpty(origLang)) ? $"[language={origLang}]" : "";
 
   string format;
   var mergeArgs = new List<string>();
+  var streamArgs = new List<string>();
   var audioPost = new List<string>();
 
   var height = QualityHeight(quality);
   if (height is int h)
   {
-    format = string.IsNullOrEmpty(codec)
-      ? $"bestvideo[height<={h}]+bestaudio/best[height<={h}]/best"
-      : $"bestvideo[height<={h}]{codec}+bestaudio/bestvideo[height<={h}]{codec}/bestvideo[height<={h}]+bestaudio/best[height<={h}]/best";
-    mergeArgs.Add("--merge-output-format");
-    mergeArgs.Add("mp4");
+    if (trackMode == "dual")
+    {
+      format = $"bestvideo[height<={h}]{codec}+bestaudio{origF}+bestaudio{dubF}/bestvideo{codec}+bestaudio{origF}+bestaudio{dubF}";
+      mergeArgs.Add("--merge-output-format");
+      mergeArgs.Add("mkv");
+      streamArgs.Add("--audio-multistreams");
+    }
+    else if (trackMode == "dub")
+    {
+      format = $"bestvideo[height<={h}]{codec}+bestaudio{dubF}/bestvideo{codec}+bestaudio{dubF}";
+      mergeArgs.Add("--merge-output-format");
+      mergeArgs.Add("mp4");
+    }
+    else
+    {
+      format = string.IsNullOrEmpty(codec)
+        ? $"bestvideo[height<={h}]+bestaudio/best[height<={h}]/best"
+        : $"bestvideo[height<={h}]{codec}+bestaudio/bestvideo[height<={h}]{codec}/bestvideo[height<={h}]+bestaudio/best[height<={h}]/best";
+      mergeArgs.Add("--merge-output-format");
+      mergeArgs.Add("mp4");
+    }
   }
   else if (quality == "best")
   {
-    format = string.IsNullOrEmpty(codec)
-      ? "bestvideo+bestaudio/best"
-      : $"bestvideo{codec}+bestaudio/bestvideo{codec}/bestvideo+bestaudio/best";
-    mergeArgs.Add("--merge-output-format");
-    mergeArgs.Add("mp4");
+    if (trackMode == "dual")
+    {
+      format = $"bestvideo{codec}+bestaudio{origF}+bestaudio{dubF}/bestvideo+bestaudio+bestaudio";
+      mergeArgs.Add("--merge-output-format");
+      mergeArgs.Add("mkv");
+      streamArgs.Add("--audio-multistreams");
+    }
+    else if (trackMode == "dub")
+    {
+      format = $"bestvideo{codec}+bestaudio{dubF}/bestvideo+bestaudio";
+      mergeArgs.Add("--merge-output-format");
+      mergeArgs.Add("mp4");
+    }
+    else
+    {
+      format = string.IsNullOrEmpty(codec)
+        ? "bestvideo+bestaudio/best"
+        : $"bestvideo{codec}+bestaudio/bestvideo{codec}/bestvideo+bestaudio/best";
+      mergeArgs.Add("--merge-output-format");
+      mergeArgs.Add("mp4");
+    }
   }
   else if (quality == "best-mp4")
   {
@@ -430,18 +600,21 @@ static string[] BuildYtDlpArgs(string url, string outputTemplate, string quality
       ? "best[ext=mp4]/best"
       : $"best[ext=mp4]{codec}/best[ext=mp4]/best";
   }
-  else if (quality.StartsWith("audio-"))
+  else if (isAudio)
   {
     var aformat = quality.Contains("-") ? quality.Split("-", 2)[1] : "mp3";
     if (aformat is not ("mp3" or "m4a" or "opus" or "wav" or "best")) aformat = "mp3";
-    format = "bestaudio/best";
+    format = trackMode == "dub" ? $"bestaudio{dubF}" : "bestaudio/best";
     if (aformat != "best")
     {
       audioPost.Add("-x");
       audioPost.Add("--audio-format");
       audioPost.Add(aformat);
-      audioPost.Add("--audio-quality");
-      audioPost.Add("0");
+      if (aformat is "mp3" or "m4a" or "opus")
+      {
+        audioPost.Add("--audio-quality");
+        audioPost.Add(abitrate);
+      }
     }
   }
   else
@@ -461,6 +634,7 @@ static string[] BuildYtDlpArgs(string url, string outputTemplate, string quality
     outputTemplate
   };
   args.AddRange(mergeArgs);
+  args.AddRange(streamArgs);
 
   if (playlistMode != "playlist")
   {
@@ -555,6 +729,9 @@ sealed class DownloadTask
   public string DownloadDir { get; set; } = "";
   public string Quality { get; set; } = "";
   public string Vcodec { get; set; } = "auto";
+  public string Abitrate { get; set; } = "0";
+  public string TrackMode { get; set; } = "orig";
+  public string DubLang { get; set; } = "";
   public string PlaylistMode { get; set; } = "";
   public string LogFile { get; set; } = "";
   public string Status { get; set; } = "";
@@ -577,4 +754,11 @@ sealed class ResolvedVideo
   public string Uploader { get; set; } = "";
   public string Duration { get; set; } = "";
   public int Index { get; set; }
+}
+
+sealed class AudioTrack
+{
+  public string Lang { get; set; } = "";
+  public string Label { get; set; } = "";
+  public bool Original { get; set; }
 }

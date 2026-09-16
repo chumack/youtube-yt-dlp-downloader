@@ -13,7 +13,7 @@
         <div class="titleBlock">
           <div class="titleRow">
             <h1>YouTube</h1>
-            <span id="version" class="version">v0.3.1</span>
+            <span id="version" class="version">v0.4.0</span>
           </div>
           <p>Загрузчик · локальный yt-dlp</p>
         </div>
@@ -104,7 +104,42 @@
               <option value="vp9">Кодек: VP9</option>
               <option value="avc">Кодек: AVC / H.264</option>
             </select>
-            <p class="fieldHint">Видео собирается из лучших дорожек YouTube до выбранной высоты и сводится в MP4. AV1/VP9 дают 4K/8K, AVC — максимальную совместимость. Аудио извлекается через ffmpeg.</p>
+            <div class="subLabel">Битрейт аудио</div>
+            <div id="bitratePresets" class="qualityPresets" aria-label="Битрейт аудио">
+              <button type="button" class="codecChip active" data-bitrate="0" aria-pressed="true">Лучшее</button>
+              <button type="button" class="codecChip" data-bitrate="320K" aria-pressed="false">320</button>
+              <button type="button" class="codecChip" data-bitrate="256K" aria-pressed="false">256</button>
+              <button type="button" class="codecChip" data-bitrate="192K" aria-pressed="false">192</button>
+              <button type="button" class="codecChip" data-bitrate="128K" aria-pressed="false">128</button>
+              <button type="button" class="codecChip" data-bitrate="96K" aria-pressed="false">96</button>
+              <button type="button" class="codecChip" data-bitrate="64K" aria-pressed="false">64</button>
+            </div>
+            <select id="abitrate" class="qualitySelect">
+              <option value="0">Битрейт: лучший</option>
+              <option value="320K">Битрейт: 320 кбит/с</option>
+              <option value="256K">Битрейт: 256 кбит/с</option>
+              <option value="192K">Битрейт: 192 кбит/с</option>
+              <option value="128K">Битрейт: 128 кбит/с</option>
+              <option value="96K">Битрейт: 96 кбит/с</option>
+              <option value="64K">Битрейт: 64 кбит/с</option>
+            </select>
+            <div class="subLabel">Аудиодорожка</div>
+            <div id="trackPresets" class="qualityPresets" aria-label="Выбор аудиодорожки">
+              <button type="button" class="codecChip active" data-trackmode="orig" aria-pressed="true">Оригинал</button>
+              <button type="button" class="codecChip" data-trackmode="dub" aria-pressed="false">Дубляж</button>
+              <button type="button" class="codecChip" data-trackmode="dual" aria-pressed="false">Оригинал + дубляж</button>
+            </div>
+            <select id="trackmode" class="qualitySelect">
+              <option value="orig">Дорожка: оригинал</option>
+              <option value="dub">Дорожка: дубляж</option>
+              <option value="dual">Дорожки: оригинал + дубляж в одном файле</option>
+            </select>
+            <div id="dubLangRow" class="dubLangRow" hidden>
+              <label for="dublang">Язык дубляжа</label>
+              <select id="dublang"></select>
+              <p id="dubHint" class="fieldHint">После поиска здесь появятся найденные в видео языки дубляжа.</p>
+            </div>
+            <p class="fieldHint">Видео собирается из лучших дорожек YouTube до выбранной высоты и сводится в MP4 (две дорожки — в MKV). AV1/VP9 дают 4K/8K, AVC — максимальную совместимость. Аудио извлекается через ffmpeg. Дубляж доступен только там, где его загрузил автор.</p>
           </div>
 
           <details class="advancedSettings">

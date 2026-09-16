@@ -8,11 +8,28 @@ const codecInput = document.getElementById("vcodec");
 const useBrowserCookiesInput = document.getElementById("useBrowserCookies");
 const useCurrentPageButton = document.getElementById("useCurrentPage");
 const clearUrlButton = document.getElementById("clearUrl");
-const qualityChips = [...document.querySelectorAll(".qualityChip")];
-const codecChips = [...document.querySelectorAll(".codecChip")];
+const qualityChips = [...document.querySelectorAll(".qualityPresets .qualityChip")];
+const codecChips = [...document.querySelectorAll("#codecPresets .codecChip")];
+const bitrateChips = [...document.querySelectorAll("#bitratePresets .codecChip")];
+const trackChips = [...document.querySelectorAll("#trackPresets .codecChip")];
+const abitrateInput = document.getElementById("abitrate");
+const trackInput = document.getElementById("trackmode");
+const dubLangInput = document.getElementById("dublang");
+const dubLangRow = document.getElementById("dubLangRow");
+const dubHint = document.getElementById("dubHint");
 const cookiesStorageKey = "ytDlpUseCookies";
 const codecStorageKey = "ytDlpVcodec";
 const qualityStorageKey = "ytDlpQuality";
+const abitrateStorageKey = "ytDlpAbitrate";
+const trackStorageKey = "ytDlpTrackMode";
+const dublangStorageKey = "ytDlpDubLang";
+// Запасной список языков дубляжа (плейлисты и видео без дорожек).
+const FALLBACK_DUB_LANGS = [
+  ["ru", "Русский"], ["uk", "Украинский"], ["en", "English"], ["es", "Español"],
+  ["pt", "Português"], ["de", "Deutsch"], ["fr", "Français"], ["it", "Italiano"],
+  ["pl", "Polski"], ["tr", "Türkçe"], ["ar", "العربية"], ["hi", "हिन्दी"],
+  ["ja", "日本語"], ["ko", "한국어"], ["zh-Hans", "中文 (упрощ.)"], ["zh-Hant", "中文 (трад.)"]
+];
 const statusText = document.getElementById("status");
 const resolveButton = document.getElementById("resolve");
 const downloadSelectedButton = document.getElementById("downloadSelected");
@@ -75,6 +92,9 @@ const previewTasks = [
     percent: 100,
     quality: "audio-mp3",
     vcodec: "auto",
+    abitrate: "192K",
+    trackMode: "orig",
+    dubLang: "",
     playlistMode: "single",
     speed: "",
     eta: "",
@@ -100,6 +120,7 @@ const previewAccount = {
 
 let pollTimer;
 let resolvedVideos = [];
+let resolvedMeta = { tracks: [], origLang: "" };
 let previewMode = "";
 let oauthConfigured = true;
 
@@ -198,6 +219,124 @@ function syncQualityChips() {
     chip.setAttribute("aria-pressed", active ? "true" : "false");
   });
   syncCodecChips();
+  syncBitrateChips();
+  syncTrackChips();
+}
+
+function audioFormatOf(value) {
+  const q = normalizeQuality(value);
+  return q.startsWith("audio-") ? q.split("-")[1] : "";
+}
+
+function isLossyAudio(value) {
+  return ["mp3", "m4a", "opus"].includes(audioFormatOf(value));
+}
+
+function normalizeAbitrate(value) {
+  const v = String(value ?? "0").trim().toUpperCase();
+  const norm = /^\d+$/.test(v) && v !== "0" ? `${v}K` : v;
+  return ["0", "64K", "96K", "128K", "192K", "256K", "320K"].includes(norm) ? norm : "0";
+}
+
+function normalizeTrackMode(value) {
+  const v = String(value ?? "orig").trim().toLowerCase();
+  return ["orig", "dub", "dual"].includes(v) ? v : "orig";
+}
+
+function syncBitrateChips() {
+  if (abitrateInput) {
+    abitrateInput.value = normalizeAbitrate(abitrateInput.value);
+  }
+  const enabled = isLossyAudio(qualityInput.value);
+  bitrateChips.forEach(chip => {
+    const active = chip.dataset.bitrate === (abitrateInput?.value || "0");
+    chip.classList.toggle("active", active);
+    chip.setAttribute("aria-pressed", active ? "true" : "false");
+    chip.disabled = !enabled;
+    chip.title = enabled ? "" : "Битрейт доступен для MP3/M4A/Opus";
+  });
+  if (abitrateInput) {
+    abitrateInput.disabled = !enabled;
+  }
+}
+
+function getAbitrate() {
+  return isLossyAudio(qualityInput.value) ? normalizeAbitrate(abitrateInput?.value) : "0";
+}
+
+function syncTrackChips() {
+  if (trackInput) {
+    trackInput.value = normalizeTrackMode(trackInput.value);
+  }
+  // best-mp4 — всегда оригинал.
+  const forcedOrig = normalizeQuality(qualityInput.value) === "best-mp4";
+  const mode = forcedOrig ? "orig" : (trackInput?.value || "orig");
+  trackChips.forEach(chip => {
+    const active = chip.dataset.trackmode === mode;
+    chip.classList.toggle("active", active);
+    chip.setAttribute("aria-pressed", active ? "true" : "false");
+    chip.disabled = forcedOrig;
+    chip.title = forcedOrig ? "«Лучший MP4» — всегда оригинал" : "";
+  });
+  if (trackInput) {
+    trackInput.disabled = forcedOrig;
+  }
+  updateDubLangRow();
+}
+
+function getTrackMode() {
+  if (normalizeQuality(qualityInput.value) === "best-mp4") return "orig";
+  return normalizeTrackMode(trackInput?.value);
+}
+
+function getDubLang() {
+  return getTrackMode() === "orig" ? "" : (dubLangInput?.value || "").trim();
+}
+
+function updateDubLangRow() {
+  if (!dubLangRow) return;
+  const show = getTrackMode() !== "orig";
+  dubLangRow.hidden = !show;
+}
+
+function populateDubLangs(tracks, origLang) {
+  if (!dubLangInput) return;
+  const prev = dubLangInput.value;
+  dubLangInput.innerHTML = "";
+  const dubs = (tracks || []).filter(t => !t.original);
+  const mkOption = (value, text) => {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = text;
+    return o;
+  };
+  if (dubs.length) {
+    dubs.forEach(t => dubLangInput.appendChild(
+      mkOption(t.lang, `${t.label || t.lang} (${t.lang})`)));
+    if (dubHint) {
+      const orig = (tracks || []).find(t => t.original);
+      dubHint.textContent = orig
+        ? `Оригинал: ${orig.label || origLang || orig.lang}. Две дорожки соберутся в один MKV.`
+        : "Найденные языки дубляжа. Две дорожки соберутся в один MKV.";
+    }
+  } else {
+    FALLBACK_DUB_LANGS.forEach(([code, name]) => dubLangInput.appendChild(
+      mkOption(code, `${name} (${code})`)));
+    if (dubHint) {
+      dubHint.textContent = tracks && tracks.length
+        ? "В этом видео дубляжа нет — только оригинал."
+        : "После поиска здесь появятся найденные в видео языки дубляжа.";
+    }
+  }
+  const values = [...dubLangInput.options].map(o => o.value);
+  const saved = localStorage.getItem(dublangStorageKey) || "";
+  if (values.includes(prev)) {
+    dubLangInput.value = prev;
+  } else if (values.includes(saved)) {
+    dubLangInput.value = saved;
+  } else if (values.includes("ru")) {
+    dubLangInput.value = "ru";
+  }
 }
 
 function syncCodecChips() {
@@ -272,6 +411,9 @@ async function resolveCurrentUrl() {
   localStorage.setItem(cookiesStorageKey, useBrowserCookiesInput.checked ? "1" : "0");
   localStorage.setItem(qualityStorageKey, normalizeQuality(qualityInput.value));
   localStorage.setItem(codecStorageKey, codecInput?.value || "auto");
+  localStorage.setItem(abitrateStorageKey, normalizeAbitrate(abitrateInput?.value));
+  localStorage.setItem(trackStorageKey, normalizeTrackMode(trackInput?.value));
+  localStorage.setItem(dublangStorageKey, (dubLangInput?.value || "").trim());
   resolveButton.disabled = true;
   setStatus("Разбираю ссылку…", "busy");
   renderVideos([]);
@@ -284,6 +426,8 @@ async function resolveCurrentUrl() {
     }
     const response = await sendNative(payload);
     resolvedVideos = response.videos || [];
+    resolvedMeta = { tracks: response.audioTracks || [], origLang: response.origLang || "" };
+    populateDubLangs(resolvedMeta.tracks, resolvedMeta.origLang);
     renderVideos(resolvedVideos);
     const cookiesNote = response.cookiesSent
       ? ` Куки: ${response.cookiesSent} (${response.cookiesFrom || "браузер"}).`
@@ -291,6 +435,8 @@ async function resolveCurrentUrl() {
     setStatus(`Готово: найдено видео: ${resolvedVideos.length}.${cookiesNote}`, "success");
   } catch (error) {
     resolvedVideos = [];
+    resolvedMeta = { tracks: [], origLang: "" };
+    populateDubLangs([], "");
     renderVideos([]);
     setStatus(`Ошибка разбора: ${error.message}`, "error");
   } finally {
@@ -308,10 +454,17 @@ async function downloadSelectedVideos() {
 
   const quality = normalizeQuality(qualityInput.value);
   const vcodec = getVcodec();
+  const abitrate = getAbitrate();
+  const trackMode = getTrackMode();
+  const dubLang = getDubLang();
+  const origLang = resolvedMeta.origLang || "";
   localStorage.setItem(downloadDirStorageKey, downloadDir);
   localStorage.setItem(cookiesStorageKey, useBrowserCookiesInput.checked ? "1" : "0");
   localStorage.setItem(qualityStorageKey, quality);
   localStorage.setItem(codecStorageKey, vcodec);
+  localStorage.setItem(abitrateStorageKey, abitrate);
+  localStorage.setItem(trackStorageKey, trackMode);
+  localStorage.setItem(dublangStorageKey, dubLang);
   downloadSelectedButton.disabled = true;
   setStatus(`Добавляю задач: ${selected.length}…`, "busy");
 
@@ -336,6 +489,10 @@ async function downloadSelectedVideos() {
         downloadDir,
         quality,
         vcodec,
+        abitrate,
+        trackMode,
+        dubLang,
+        origLang,
         playlistMode: "single",
         ...(cookiesTxt ? { useBrowserCookies: true, cookiesTxt } : {})
       });
@@ -439,7 +596,7 @@ function renderVideos(videos) {
   resolveSummary.textContent = `Всего видео: ${videos.length}. Можно выбрать одно или несколько.`;
   resolveChips.innerHTML = `
     <span>Видео: ${videos.length}</span>
-    <span>${escapeHtml(fullFormatText(qualityInput.value, getVcodec()))}</span>
+    <span>${escapeHtml(fullFormatText(qualityInput.value, getVcodec(), getAbitrate(), getTrackMode(), getDubLang()))}</span>
     <span>Папка задана</span>
   `;
   videoList.innerHTML = videos.map((video, index) => `
@@ -483,6 +640,9 @@ function renderTasks(tasks) {
     const speed = task.Speed || task.speed || "";
     const quality = task.Quality || task.quality || "";
     const vcodec = task.Vcodec || task.vcodec || "auto";
+    const abitrate = task.Abitrate || task.abitrate || "0";
+    const trackMode = task.TrackMode || task.trackMode || task.trackmode || "orig";
+    const dubLang = task.DubLang || task.dubLang || task.dublang || "";
     const canCancel = status === "running" || status === "starting";
 
     return `
@@ -492,7 +652,7 @@ function renderTasks(tasks) {
           <span>${percent.toFixed(percent ? 1 : 0)}%</span>
         </div>
         <div class="bar"><span style="width:${percent}%"></span></div>
-        <div class="meta">${escapeHtml(fullFormatText(quality, vcodec))}${speed ? ` · ${escapeHtml(speed)}` : ""}${eta ? ` · ETA ${escapeHtml(eta)}` : ""}</div>
+        <div class="meta">${escapeHtml(fullFormatText(quality, vcodec, abitrate, trackMode, dubLang))}${speed ? ` · ${escapeHtml(speed)}` : ""}${eta ? ` · ETA ${escapeHtml(eta)}` : ""}</div>
         <div class="line">${escapeHtml(line)}</div>
         <div class="taskActions">
           <button class="ghost small" data-cancel="${escapeHtml(id)}" ${canCancel ? "" : "disabled"}>Отмена</button>
@@ -637,13 +797,30 @@ function codecText(value) {
   }[value || "auto"] || value;
 }
 
-function fullFormatText(quality, vcodec) {
+function abitrateText(value) {
+  const v = normalizeAbitrate(value);
+  return v === "0" ? "" : ` · ${v.replace("K", "")} кбит/с`;
+}
+
+function trackText(mode, dubLang) {
+  const m = normalizeTrackMode(mode);
+  if (m === "dub") return ` · дубляж ${String(dubLang || "").toUpperCase()}`;
+  if (m === "dual") return ` · оригинал+${String(dubLang || "").toUpperCase()}`;
+  return "";
+}
+
+function fullFormatText(quality, vcodec, abitrate, trackMode, dubLang) {
   const q = normalizeQuality(quality);
+  const tm = normalizeTrackMode(trackMode);
+  const dl = (dubLang || "").trim();
   if (isAudioQuality(q)) {
-    return qualityText(q);
+    if (tm !== "orig" && dl) {
+      return `${qualityText(q)}${abitrateText(abitrate)} · дубляж ${dl.toUpperCase()}`;
+    }
+    return `${qualityText(q)}${abitrateText(abitrate)}`;
   }
   const vc = vcodec && vcodec !== "auto" ? ` · ${codecText(vcodec)}` : "";
-  return `${qualityText(q)}${vc}`;
+  return `${qualityText(q)}${vc}${trackText(tm, dl)}`;
 }
 
 function escapeHtml(value) {
@@ -675,6 +852,23 @@ document.addEventListener("DOMContentLoaded", async () => {
     if ([...codecInput.options].some(o => o.value === savedCodec)) {
       codecInput.value = savedCodec;
     }
+  }
+  if (abitrateInput) {
+    const savedBitrate = normalizeAbitrate(localStorage.getItem(abitrateStorageKey));
+    if ([...abitrateInput.options].some(o => o.value === savedBitrate)) {
+      abitrateInput.value = savedBitrate;
+    }
+  }
+  if (trackInput) {
+    const savedTrack = normalizeTrackMode(localStorage.getItem(trackStorageKey));
+    if ([...trackInput.options].some(o => o.value === savedTrack)) {
+      trackInput.value = savedTrack;
+    }
+  }
+  populateDubLangs([], "");
+  const savedDub = (localStorage.getItem(dublangStorageKey) || "").trim();
+  if (savedDub && [...dubLangInput.options].some(o => o.value === savedDub)) {
+    dubLangInput.value = savedDub;
   }
   syncQualityChips();
 
@@ -734,6 +928,29 @@ codecChips.forEach(chip => chip.addEventListener("click", () => {
 codecInput?.addEventListener("change", () => {
   localStorage.setItem(codecStorageKey, codecInput.value);
   syncCodecChips();
+});
+bitrateChips.forEach(chip => chip.addEventListener("click", () => {
+  if (chip.disabled) return;
+  if (abitrateInput) abitrateInput.value = chip.dataset.bitrate;
+  localStorage.setItem(abitrateStorageKey, chip.dataset.bitrate);
+  syncBitrateChips();
+}));
+abitrateInput?.addEventListener("change", () => {
+  localStorage.setItem(abitrateStorageKey, abitrateInput.value);
+  syncBitrateChips();
+});
+trackChips.forEach(chip => chip.addEventListener("click", () => {
+  if (chip.disabled) return;
+  if (trackInput) trackInput.value = chip.dataset.trackmode;
+  localStorage.setItem(trackStorageKey, chip.dataset.trackmode);
+  syncTrackChips();
+}));
+trackInput?.addEventListener("change", () => {
+  localStorage.setItem(trackStorageKey, trackInput.value);
+  syncTrackChips();
+});
+dubLangInput?.addEventListener("change", () => {
+  localStorage.setItem(dublangStorageKey, (dubLangInput.value || "").trim());
 });
 useBrowserCookiesInput.addEventListener("change", () => {
   localStorage.setItem(cookiesStorageKey, useBrowserCookiesInput.checked ? "1" : "0");

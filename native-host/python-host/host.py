@@ -341,38 +341,13 @@ def action_resolve(root):
     url = root.get("url") or ""
     if not is_youtube_url(url):
         return {"ok": False, "error": "Only YouTube URLs are supported."}
-    args = base_args()
-    args += [
-        "--dump-single-json",
-        "--flat-playlist",
-        "--skip-download",
-        "--no-warnings",
-    ]
     cookie_extra, cookies_from, cookies_sent = cookie_args(root)
-    args += cookie_extra
-    args.append(url)
     try:
-        proc = subprocess.Popen(
-            [resolve_ytdlp_path()] + args,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            creationflags=CREATE_NO_WINDOW,
-        )
-        try:
-            stdout, stderr = proc.communicate(timeout=RESOLVE_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            stdout, stderr = proc.communicate()
-            return {"ok": False, "error": "Timed out while resolving the URL.", "cookiesFrom": cookies_from}
-        if proc.returncode != 0:
-            err = (stderr or b"").decode("utf-8", errors="replace").strip()
-            if not err:
-                err = "yt-dlp exited with code %d" % proc.returncode
-            return {"ok": False, "error": with_bot_hint(err), "cookiesFrom": cookies_from}
-        info = json.loads((stdout or b"").decode("utf-8", errors="replace"))
+        info = dump_info_json(url, cookie_extra, flat=True)
     except FileNotFoundError:
         return {"ok": False, "error": "yt-dlp not found. Install yt-dlp or set YTDLP_PATH."}
+    except RuntimeError as ex:
+        return {"ok": False, "error": with_bot_hint(str(ex)), "cookiesFrom": cookies_from}
     except Exception as ex:
         return {"ok": False, "error": str(ex)}
 
@@ -411,12 +386,25 @@ def action_resolve(root):
                 "index": 1,
             }
         )
+    # Для одиночного видео вторым проходом читаем полные форматы,
+    # чтобы показать доступные аудиодорожки (языки дубляжа).
+    # Ошибка второго прохода не роняет resolve.
+    audio_tracks = []
+    orig_lang = ""
+    if source_type == "video":
+        try:
+            full = dump_info_json(url, cookie_extra, flat=False)
+            audio_tracks, orig_lang = extract_audio_tracks(full)
+        except Exception as ex:
+            diag("tracks failed: %s" % ex)
     return {
         "ok": True,
         "title": title or url,
         "sourceType": source_type,
         "count": len(videos),
         "videos": videos,
+        "audioTracks": audio_tracks,
+        "origLang": orig_lang,
         "cookiesFrom": cookies_from,
         "cookiesSent": cookies_sent,
     }
@@ -465,8 +453,111 @@ VIDEO_HEIGHTS = {
 
 AUDIO_FORMATS = {"mp3", "m4a", "opus", "wav", "best"}
 
+# Допустимые значения битрейта для lossy-аудио (ffmpeg --audio-quality).
+# "0" = лучшее качество (VBR), остальные — фиксированный битрейт.
+AUDIO_BITRATES = {"0", "64K", "96K", "128K", "192K", "256K", "320K"}
 
-def build_ytdlp_args(url, output_template, quality, playlist_mode, vcodec="auto"):
+# Аудиоформаты, для которых битрейт имеет смысл (lossy с энкодером).
+BITRATE_FORMATS = {"mp3", "m4a", "opus"}
+
+TRACK_MODES = {"orig", "dub", "dual"}
+
+LANG_RE = re.compile(r"^[a-z]{2,3}(?:-[A-Za-z]+)*$")
+
+
+def normalize_abitrate(value):
+    v = str(value or "0").strip().upper()
+    if v.endswith("K") and v[:-1].isdigit():
+        v = v
+    elif v.isdigit():
+        v = v + "K" if v != "0" else "0"
+    return v if v in AUDIO_BITRATES else "0"
+
+
+def normalize_track_mode(value):
+    v = str(value or "orig").strip().lower()
+    return v if v in TRACK_MODES else "orig"
+
+
+def normalize_lang(value):
+    v = str(value or "").strip()
+    if not v or not LANG_RE.match(v):
+        return ""
+    # Сохраняем регистр субтега (zh-Hans), основной код — строчными.
+    parts = v.split("-")
+    return "-".join([parts[0].lower()] + parts[1:])
+
+
+def extract_audio_tracks(info):
+    """Дорожки из полного -J: [{'lang','label','original'}], orig_lang.
+
+    Оригиналом считается дорожка на языке видео (info.language)
+    либо с пометкой 'original' в format_note.
+    """
+    video_lang = normalize_lang(info.get("language"))
+    by_lang = {}
+    for f in info.get("formats") or []:
+        if not isinstance(f, dict):
+            continue
+        if f.get("vcodec") != "none" or f.get("acodec") == "none":
+            continue
+        lang = normalize_lang(f.get("language"))
+        if not lang:
+            continue
+        note = str(f.get("format_note") or "")
+        if lang not in by_lang:
+            by_lang[lang] = {"lang": lang, "label": note or lang,
+                             "original": False, "_note": note}
+    tracks = []
+    orig_lang = ""
+    for lang, t in by_lang.items():
+        is_orig = bool(
+            (video_lang and lang.lower() == video_lang.lower())
+            or "original" in t["_note"].lower()
+        )
+        if is_orig and not orig_lang:
+            orig_lang = lang
+        t = {"lang": t["lang"], "label": t["label"], "original": is_orig}
+        tracks.append(t)
+    tracks.sort(key=lambda t: (not t["original"], t["lang"]))
+    if not orig_lang and tracks:
+        # Хотя бы язык видео обычно первый; иначе оригинал неизвестен.
+        pass
+    return tracks, orig_lang
+
+
+def dump_info_json(url, cookie_extra, flat):
+    """Запуск yt-dlp -J. Возвращает info dict, бросает RuntimeError/FileNotFoundError."""
+    args = base_args()
+    args += ["--dump-single-json", "--skip-download", "--no-warnings"]
+    if flat:
+        args.append("--flat-playlist")
+    args += cookie_extra
+    args.append(url)
+    try:
+        proc = subprocess.Popen(
+            [resolve_ytdlp_path()] + args,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=CREATE_NO_WINDOW,
+        )
+    except FileNotFoundError:
+        raise
+    try:
+        stdout, stderr = proc.communicate(timeout=RESOLVE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        raise RuntimeError("Timed out while resolving the URL.")
+    if proc.returncode != 0:
+        err = (stderr or b"").decode("utf-8", errors="replace").strip()
+        raise RuntimeError(err or "yt-dlp exited with code %d" % proc.returncode)
+    return json.loads((stdout or b"").decode("utf-8", errors="replace"))
+
+
+def build_ytdlp_args(url, output_template, quality, playlist_mode, vcodec="auto",
+                     abitrate="0", track_mode="orig", dub_lang="", orig_lang=""):
     quality = normalize_quality(quality)
     vcodec = normalize_vcodec(vcodec)
     # Кодек применяется только к видео; для аудио игнорируется.
@@ -474,47 +565,96 @@ def build_ytdlp_args(url, output_template, quality, playlist_mode, vcodec="auto"
         vcodec = "auto"
     codec = vcodec_filter(vcodec)
 
+    abitrate = normalize_abitrate(abitrate)
+    track_mode = normalize_track_mode(track_mode)
+    dub_lang = normalize_lang(dub_lang)
+    orig_lang = normalize_lang(orig_lang)
+    # "Лучший MP4 одним файлом" — всегда оригинал; dual для аудио
+    # невозможен (один аудиофайл) — скачиваем дубляж отдельно.
+    is_audio = quality.startswith("audio-")
+    if quality == "best-mp4":
+        track_mode = "orig"
+    if is_audio and track_mode == "dual":
+        track_mode = "dub"
+    if track_mode in ("dub", "dual") and not dub_lang:
+        track_mode = "orig"
+
+    dub_f = "[language=%s]" % dub_lang if track_mode in ("dub", "dual") else ""
+    orig_f = "[language=%s]" % orig_lang if (track_mode == "dual" and orig_lang) else ""
+
     fmt = ""
     merge_args = []
+    stream_args = []
     audio_post = []
 
     if quality in VIDEO_HEIGHTS:
         h = VIDEO_HEIGHTS[quality]
-        if codec:
+        if track_mode == "dual":
+            fmt = (
+                "bestvideo[height<=%d]%s+bestaudio%s+bestaudio%s/"
+                "bestvideo%s+bestaudio%s+bestaudio%s"
+                % (h, codec, orig_f, dub_f, codec, orig_f, dub_f)
+            )
+            merge_args = ["--merge-output-format", "mkv"]
+            stream_args = ["--audio-multistreams"]
+        elif track_mode == "dub":
+            fmt = (
+                "bestvideo[height<=%d]%s+bestaudio%s/"
+                "bestvideo%s+bestaudio%s" % (h, codec, dub_f, codec, dub_f)
+            )
+            merge_args = ["--merge-output-format", "mp4"]
+        elif codec:
             fmt = (
                 "bestvideo[height<=%d]%s+bestaudio/"
                 "bestvideo[height<=%d]%s/"
                 "bestvideo[height<=%d]+bestaudio/"
                 "best[height<=%d]/best" % (h, codec, h, codec, h, h)
             )
+            merge_args = ["--merge-output-format", "mp4"]
         else:
             fmt = (
                 "bestvideo[height<=%d]+bestaudio/"
                 "best[height<=%d]/best" % (h, h)
             )
-        merge_args = ["--merge-output-format", "mp4"]
+            merge_args = ["--merge-output-format", "mp4"]
     elif quality == "best":
-        if codec:
+        if track_mode == "dual":
+            fmt = (
+                "bestvideo%s+bestaudio%s+bestaudio%s/"
+                "bestvideo+bestaudio+bestaudio" % (codec, orig_f, dub_f)
+            )
+            merge_args = ["--merge-output-format", "mkv"]
+            stream_args = ["--audio-multistreams"]
+        elif track_mode == "dub":
+            fmt = "bestvideo%s+bestaudio%s/bestvideo+bestaudio" % (codec, dub_f)
+            merge_args = ["--merge-output-format", "mp4"]
+        elif codec:
             fmt = (
                 "bestvideo%s+bestaudio/"
                 "bestvideo%s/"
                 "bestvideo+bestaudio/best" % (codec, codec)
             )
+            merge_args = ["--merge-output-format", "mp4"]
         else:
             fmt = "bestvideo+bestaudio/best"
-        merge_args = ["--merge-output-format", "mp4"]
+            merge_args = ["--merge-output-format", "mp4"]
     elif quality == "best-mp4":
         if codec:
             fmt = "best[ext=mp4]%s/best[ext=mp4]/best" % codec
         else:
             fmt = "best[ext=mp4]/best"
-    elif quality.startswith("audio-"):
+    elif is_audio:
         aformat = quality.split("-", 1)[1] if "-" in quality else "mp3"
         if aformat not in AUDIO_FORMATS:
             aformat = "mp3"
-        fmt = "bestaudio/best"
+        if track_mode == "dub":
+            fmt = "bestaudio%s" % dub_f
+        else:
+            fmt = "bestaudio/best"
         if aformat != "best":
-            audio_post = ["-x", "--audio-format", aformat, "--audio-quality", "0"]
+            audio_post = ["-x", "--audio-format", aformat]
+            if aformat in BITRATE_FORMATS:
+                audio_post += ["--audio-quality", abitrate]
     else:
         fmt = "best[ext=mp4]/best"
 
@@ -529,6 +669,7 @@ def build_ytdlp_args(url, output_template, quality, playlist_mode, vcodec="auto"
         output_template,
     ]
     args += merge_args
+    args += stream_args
     if playlist_mode == "playlist":
         args.append("--yes-playlist")
     else:
@@ -634,6 +775,10 @@ def action_start(root):
     playlist_mode = root.get("playlistMode") or "single"
     quality = normalize_quality(root.get("quality") or "best-mp4")
     vcodec = normalize_vcodec(root.get("vcodec") or "auto")
+    abitrate = normalize_abitrate(root.get("abitrate") or "0")
+    track_mode = normalize_track_mode(root.get("trackMode") or "orig")
+    dub_lang = normalize_lang(root.get("dubLang") or "")
+    orig_lang = normalize_lang(root.get("origLang") or "")
     target_dir = resolve_download_dir(download_dir)
     log_dir = os.path.join(target_dir, "yt-dlp-logs")
     os.makedirs(log_dir, exist_ok=True)
@@ -650,6 +795,9 @@ def action_start(root):
         "DownloadDir": target_dir,
         "Quality": quality,
         "Vcodec": vcodec,
+        "Abitrate": abitrate,
+        "TrackMode": track_mode,
+        "DubLang": dub_lang,
         "PlaylistMode": playlist_mode,
         "LogFile": log_file,
         "Status": "starting",
@@ -668,7 +816,8 @@ def action_start(root):
     with tasks_lock:
         tasks[task_id] = task
 
-    args = build_ytdlp_args(url, output_template, quality, playlist_mode, vcodec)
+    args = build_ytdlp_args(url, output_template, quality, playlist_mode, vcodec,
+                            abitrate, track_mode, dub_lang, orig_lang)
     # --cookies* must come before the URL (order is free, keep them grouped)
     args = args[:-1] + cookie_extra + args[-1:]
     try:
@@ -702,7 +851,7 @@ def action_start(root):
     with tasks_lock:
         task["ProcessId"] = proc.pid
         task["Status"] = "running"
-    diag("start id=%s pid=%s quality=%s vcodec=%s cookiesFrom=%s" % (task_id, proc.pid, quality, vcodec, cookies_from))
+    diag("start id=%s pid=%s quality=%s vcodec=%s abitrate=%s track=%s dub=%s cookiesFrom=%s" % (task_id, proc.pid, quality, vcodec, abitrate, track_mode, dub_lang, cookies_from))
     t = threading.Thread(target=pump_process, args=(proc, task_id, log_file), daemon=True)
     t.start()
     return {"ok": True, "task": snapshot(task)}

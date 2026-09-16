@@ -541,6 +541,18 @@ button.small {
   opacity: 0.45;
 }
 
+.dubLangRow {
+  margin-top: 10px;
+}
+
+.dubLangRow[hidden] {
+  display: none;
+}
+
+.dubLangRow select {
+  margin-top: 2px;
+}
+
 .selection .sectionHead,
 .tasksHead,
 .accountList .sectionHead {
