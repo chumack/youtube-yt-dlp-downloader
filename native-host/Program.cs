@@ -568,7 +568,8 @@ static string[] BuildYtDlpArgs(string url, string outputTemplate, string quality
   {
     if (trackMode == "dual")
     {
-      format = $"bestvideo[height<={h}]{codec}+bestaudio{origF}+bestaudio{dubF}/bestvideo{codec}+bestaudio{origF}+bestaudio{dubF}";
+      // Дубляж — первой дорожкой, оригинал — второй.
+      format = $"bestvideo[height<={h}]{codec}+bestaudio{dubF}+bestaudio{origF}/bestvideo{codec}+bestaudio{dubF}+bestaudio{origF}";
       mergeArgs.Add("--merge-output-format");
       mergeArgs.Add("mkv");
       streamArgs.Add("--audio-multistreams");
@@ -592,7 +593,8 @@ static string[] BuildYtDlpArgs(string url, string outputTemplate, string quality
   {
     if (trackMode == "dual")
     {
-      format = $"bestvideo{codec}+bestaudio{origF}+bestaudio{dubF}/bestvideo+bestaudio+bestaudio";
+      // Дубляж — первой дорожкой, оригинал — второй.
+      format = $"bestvideo{codec}+bestaudio{dubF}+bestaudio{origF}/bestvideo+bestaudio+bestaudio";
       mergeArgs.Add("--merge-output-format");
       mergeArgs.Add("mkv");
       streamArgs.Add("--audio-multistreams");

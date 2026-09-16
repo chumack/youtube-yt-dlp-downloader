@@ -331,8 +331,8 @@ function populateDubLangs(tracks, origLang) {
     if (dubHint) {
       const orig = (tracks || []).find(t => t.original);
       dubHint.textContent = orig
-        ? `Оригинал: ${orig.label || origLang || orig.lang}. Две дорожки соберутся в один MKV.`
-        : "Найденные языки дубляжа. Две дорожки соберутся в один MKV.";
+        ? `Оригинал: ${orig.label || origLang || orig.lang}. Две дорожки соберутся в один MKV, дубляж — первой.`
+        : "Найденные языки дубляжа. Две дорожки соберутся в один MKV, дубляж — первой.";
     }
   } else {
     FALLBACK_DUB_LANGS.forEach(([code, name]) => dubLangInput.appendChild(
@@ -864,7 +864,7 @@ function abitrateText(value) {
 function trackText(mode, dubLang) {
   const m = normalizeTrackMode(mode);
   if (m === "dub") return ` · дубляж ${String(dubLang || "").toUpperCase()}`;
-  if (m === "dual") return ` · оригинал+${String(dubLang || "").toUpperCase()}`;
+  if (m === "dual") return ` · дубляж ${String(dubLang || "").toUpperCase()} + оригинал`;
   return "";
 }
 

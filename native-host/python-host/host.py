@@ -591,10 +591,11 @@ def build_ytdlp_args(url, output_template, quality, playlist_mode, vcodec="auto"
     if quality in VIDEO_HEIGHTS:
         h = VIDEO_HEIGHTS[quality]
         if track_mode == "dual":
+            # Дубляж — первой дорожкой, оригинал — второй.
             fmt = (
                 "bestvideo[height<=%d]%s+bestaudio%s+bestaudio%s/"
                 "bestvideo%s+bestaudio%s+bestaudio%s"
-                % (h, codec, orig_f, dub_f, codec, orig_f, dub_f)
+                % (h, codec, dub_f, orig_f, codec, dub_f, orig_f)
             )
             merge_args = ["--merge-output-format", "mkv"]
             stream_args = ["--audio-multistreams"]
@@ -620,9 +621,10 @@ def build_ytdlp_args(url, output_template, quality, playlist_mode, vcodec="auto"
             merge_args = ["--merge-output-format", "mp4"]
     elif quality == "best":
         if track_mode == "dual":
+            # Дубляж — первой дорожкой, оригинал — второй.
             fmt = (
                 "bestvideo%s+bestaudio%s+bestaudio%s/"
-                "bestvideo+bestaudio+bestaudio" % (codec, orig_f, dub_f)
+                "bestvideo+bestaudio+bestaudio" % (codec, dub_f, orig_f)
             )
             merge_args = ["--merge-output-format", "mkv"]
             stream_args = ["--audio-multistreams"]
