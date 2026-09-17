@@ -28,6 +28,8 @@ import json
 import os
 import re
 import shutil
+import signal
+import socket
 import struct
 import subprocess
 import sys
@@ -189,8 +191,234 @@ def js_runtime_args():
     return ["--js-runtimes", "node"] if _node_cache["ok"] else []
 
 
+def resolve_ffmpeg_path():
+    """Absolute path to ffmpeg, or None.
+
+    yt-dlp looks for ffmpeg on its own PATH; under a browser-launched host
+    that lookup has been seen to fail even with ffmpeg installed, leaving
+    multi-track downloads unmerged. Passing --ffmpeg-location explicitly
+    makes the merge deterministic. Overridable via FFMPEG_PATH.
+    """
+    env_path = os.environ.get("FFMPEG_PATH", "").strip()
+    if env_path:
+        if os.path.isfile(env_path):
+            return env_path
+        found = shutil.which(env_path)
+        if found:
+            return found
+    return shutil.which("ffmpeg")
+
+
+def ffmpeg_args():
+    path = resolve_ffmpeg_path()
+    return ["--ffmpeg-location", path] if path else []
+
+
+# Переменные загрузчика, которые браузеры иногда подмешивают в окружение
+# (каталоги со своими bundled-библиотеками). Под ними системный ffmpeg/yt-dlp
+# может не запускаться — yt-dlp тогда рапортует "ffmpeg is not installed",
+# хотя путь передан явно через --ffmpeg-location.
+_SCRUB_ENV_VARS = ("LD_LIBRARY_PATH", "LD_PRELOAD")
+_child_env_cache = {"env": None}
+_ffmpeg_check_cache = {"result": None}
+
+
+def scrubbed_env():
+    """Копия окружения без загрузочных переменных + список убранных."""
+    env = dict(os.environ)
+    removed = [k for k in _SCRUB_ENV_VARS if env.pop(k, None) is not None]
+    return env, removed
+
+
+def _try_ffmpeg(path, env):
+    """(ok, detail): запускается ли ffmpeg с данным окружением.
+
+    Проверяем тем же способом, что yt-dlp (ffmpeg -bsfs, нужен код 0):
+    -version может выйти 0 даже когда реальная работа (и проверка yt-dlp)
+    падает — например, под LD_PRELOAD от Vivaldi ffmpeg печатает баннер
+    и затем валится с SIGSEGV.
+    """
+    try:
+        proc = subprocess.run(
+            [path, "-bsfs"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=15,
+            env=env,
+        )
+    except Exception as ex:
+        return (False, "failed to start: %s" % ex)
+    if proc.returncode != 0:
+        tail = (proc.stdout or b"").decode("utf-8", errors="replace").strip().splitlines()
+        tail = " / ".join(tail[-3:]) if tail else "no output"
+        return (False, "exit %s: %s" % (proc.returncode, tail))
+    return (True, "ok")
+
+
+def child_env():
+    """Окружение для дочерних yt-dlp.
+
+    Если наследованное от браузера окружение ломает запуск ffmpeg —
+    убираем LD_LIBRARY_PATH/LD_PRELOAD (один раз за процесс).
+    YTDLP_KEEP_LD=1 отключает любую чистку.
+    """
+    if _child_env_cache["env"] is not None:
+        return _child_env_cache["env"]
+    env = dict(os.environ)
+    if os.environ.get("YTDLP_KEEP_LD", "") != "1":
+        path = resolve_ffmpeg_path()
+        if path and not _try_ffmpeg(path, env)[0]:
+            scrub, removed = scrubbed_env()
+            if removed and _try_ffmpeg(path, scrub)[0]:
+                env = scrub
+                diag("env scrubbed %s for yt-dlp children" % ",".join(removed))
+    _child_env_cache["env"] = env
+    return env
+
+
+def check_ffmpeg():
+    """(ok, detail): ffmpeg найден и реально запускается в окружении детей."""
+    if _ffmpeg_check_cache["result"] is not None:
+        return _ffmpeg_check_cache["result"]
+    path = resolve_ffmpeg_path()
+    if not path:
+        result = (False, "ffmpeg not found. Install ffmpeg or set FFMPEG_PATH")
+    else:
+        ok, detail = _try_ffmpeg(path, child_env())
+        if ok:
+            result = (True, "%s (%s)" % (path, detail))
+        else:
+            result = (False, "ffmpeg at %s does not run (%s). "
+                      "Install a working ffmpeg or set FFMPEG_PATH" % (path, detail))
+    _ffmpeg_check_cache["result"] = result
+    return result
+
+
+_ip_probe_cache = {"at": 0.0, "result": None}
+IP_PROBE_TTL = 300
+IP_PROBE_TIMEOUT = 3.0
+IP_PROBE_HOST = os.environ.get("YTDLP_IP_PROBE_HOST", "www.youtube.com")
+IP_PROBE_PORT = 443
+_IP_PROBE_FILE = os.path.join(tempfile.gettempdir(), "yt_dlp_host_ipprobe.json")
+
+
+def _tcp_connect_time(family, timeout):
+    """Fastest TCP connect time to the probe host for one family, or None."""
+    try:
+        infos = socket.getaddrinfo(IP_PROBE_HOST, IP_PROBE_PORT,
+                                   family, socket.SOCK_STREAM)
+    except Exception:
+        return None
+    best = None
+    for info in infos[:3]:
+        af, socktype, proto, _, sa = info
+        s = socket.socket(af, socktype, proto)
+        s.settimeout(timeout)
+        t0 = time.monotonic()
+        try:
+            s.connect(sa)
+            dt = time.monotonic() - t0
+            if best is None or dt < best:
+                best = dt
+        except Exception:
+            pass
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+    return best
+
+
+def _read_probe_file():
+    """Shared probe result from a previous host process, or None."""
+    try:
+        with open(_IP_PROBE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return None
+        if time.time() - float(data.get("at", 0)) >= IP_PROBE_TTL:
+            return None
+        return (data.get("v4"), data.get("v6"))
+    except Exception:
+        return None
+
+
+def _write_probe_file(result):
+    try:
+        with open(_IP_PROBE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"at": time.time(), "v4": result[0], "v6": result[1]}, f)
+    except Exception:
+        pass
+
+
+def probe_ip_versions():
+    """Probe IPv4/IPv6 TCP connectivity to YouTube.
+
+    Returns (v4_seconds|None, v6_seconds|None); result is cached in memory
+    and in a temp file shared across host processes for IP_PROBE_TTL
+    seconds. Both families are probed in parallel.
+    """
+    now = time.monotonic()
+    if (_ip_probe_cache["result"] is not None
+            and now - _ip_probe_cache["at"] < IP_PROBE_TTL):
+        return _ip_probe_cache["result"]
+    shared = _read_probe_file()
+    if shared is not None:
+        _ip_probe_cache["at"] = now
+        _ip_probe_cache["result"] = shared
+        return shared
+    results = {}
+
+    def run(family, key):
+        results[key] = _tcp_connect_time(family, IP_PROBE_TIMEOUT)
+
+    tv4 = threading.Thread(target=run, args=(socket.AF_INET, "v4"), daemon=True)
+    tv6 = threading.Thread(target=run, args=(socket.AF_INET6, "v6"), daemon=True)
+    tv4.start()
+    tv6.start()
+    tv4.join(IP_PROBE_TIMEOUT + 2)
+    tv6.join(IP_PROBE_TIMEOUT + 2)
+    result = (results.get("v4"), results.get("v6"))
+    _ip_probe_cache["at"] = now
+    _ip_probe_cache["result"] = result
+    _write_probe_file(result)
+    diag("ip probe v4=%s v6=%s" % (
+        ("%.3fs" % result[0]) if result[0] is not None else "fail",
+        ("%.3fs" % result[1]) if result[1] is not None else "fail"))
+    return result
+
+
+def ip_version_args():
+    """Pin yt-dlp to the working/faster IP family, unless overridden.
+
+    YTDLP_IP_VERSION=4|6 pins a family; YTDLP_FORCE_IPV4=1 pins IPv4
+    (legacy), =0 leaves the yt-dlp default. Default (auto): probe YouTube
+    over both families — pin the only working one, or the faster one when
+    both work; no flag when neither answers (network is down anyway).
+    """
+    pinned = os.environ.get("YTDLP_IP_VERSION", "").strip()
+    legacy = os.environ.get("YTDLP_FORCE_IPV4", "")
+    if pinned == "4" or legacy == "1":
+        return ["--force-ipv4"]
+    if pinned == "6":
+        return ["--force-ipv6"]
+    if legacy == "0":
+        return []
+    v4, v6 = probe_ip_versions()
+    if v4 is not None and v6 is not None:
+        return ["--force-ipv6"] if v6 <= v4 else ["--force-ipv4"]
+    if v6 is not None:
+        return ["--force-ipv6"]
+    if v4 is not None:
+        return ["--force-ipv4"]
+    return []
+
+
 def base_args():
-    return ["--ignore-config"] + impersonate_args() + js_runtime_args()
+    return (["--ignore-config"] + ip_version_args() + ffmpeg_args()
+            + impersonate_args() + js_runtime_args())
 
 
 BOT_PATTERNS = (
@@ -576,6 +804,7 @@ def dump_info_json(url, cookie_extra, flat):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             creationflags=CREATE_NO_WINDOW,
+            env=child_env(),
         )
     except FileNotFoundError:
         raise
@@ -839,6 +1068,12 @@ def action_start(root):
     track_mode = normalize_track_mode(root.get("trackMode") or "orig")
     dub_lang = normalize_lang(root.get("dubLang") or "")
     orig_lang = normalize_lang(root.get("origLang") or "")
+    # Кроме одиночного MP4 и аудио-оригинала всё собирается через ffmpeg:
+    # без него yt-dlp молча оставит несмерженные куски.
+    if quality not in ("best-mp4", "audio-best"):
+        ffmpeg_ok, ffmpeg_detail = check_ffmpeg()
+        if not ffmpeg_ok:
+            return {"ok": False, "error": "ffmpeg problem: %s." % ffmpeg_detail}
     target_dir = resolve_download_dir(download_dir)
     log_dir = os.path.join(target_dir, "yt-dlp-logs")
     os.makedirs(log_dir, exist_ok=True)
@@ -892,6 +1127,7 @@ def action_start(root):
             errors="replace",
             bufsize=1,
             creationflags=CREATE_NO_WINDOW,
+            env=child_env(),
         )
     except FileNotFoundError:
         with tasks_lock:
@@ -911,7 +1147,8 @@ def action_start(root):
     with tasks_lock:
         task["ProcessId"] = proc.pid
         task["Status"] = "running"
-    diag("start id=%s pid=%s quality=%s vcodec=%s abitrate=%s track=%s dub=%s cookiesFrom=%s" % (task_id, proc.pid, quality, vcodec, abitrate, track_mode, dub_lang, cookies_from))
+    diag("start id=%s pid=%s quality=%s vcodec=%s abitrate=%s track=%s dub=%s cookiesFrom=%s ffmpeg=%s ytdlp=%s" % (task_id, proc.pid, quality, vcodec, abitrate, track_mode, dub_lang, cookies_from, resolve_ffmpeg_path(), resolve_ytdlp_path()))
+    diag("argv: %s" % " ".join([resolve_ytdlp_path()] + args))
     t = threading.Thread(target=pump_process, args=(proc, task_id, log_file), daemon=True)
     t.start()
     return {"ok": True, "task": snapshot(task)}
@@ -958,12 +1195,20 @@ def action_cancel(root):
     pid = task.get("ProcessId")
     if pid:
         try:
-            subprocess.run(
-                ["taskkill", "/PID", str(pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=CREATE_NO_WINDOW,
-            )
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=CREATE_NO_WINDOW,
+                )
+            else:
+                try:
+                    os.kill(int(pid), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                except Exception:
+                    pass
         except Exception:
             pass
     with tasks_lock:

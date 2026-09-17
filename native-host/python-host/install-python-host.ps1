@@ -3,7 +3,8 @@
 param(
   [string]$ExtensionId = "lgdfehfacdnpknkphkfmmollklciaaal",
   [string]$PublishDir = (Join-Path (Split-Path $PSScriptRoot -Parent) "publish"),
-  [string]$YtDlpPath = ""
+  [string]$YtDlpPath = "",
+  [string]$FfmpegPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,6 +37,20 @@ if ([string]::IsNullOrWhiteSpace($YtDlpPath)) {
     $cmd = Get-Command yt-dlp -ErrorAction SilentlyContinue
     if ($cmd) { $YtDlpPath = $cmd.Source }
   }
+}
+
+# 3a. locate ffmpeg (needed for merging video+audio)
+if ([string]::IsNullOrWhiteSpace($FfmpegPath)) {
+  $envFf = [Environment]::GetEnvironmentVariable("FFMPEG_PATH", "User")
+  if (-not [string]::IsNullOrWhiteSpace($envFf) -and (Test-Path -LiteralPath $envFf)) {
+    $FfmpegPath = $envFf
+  } else {
+    $cmd = Get-Command ffmpeg -ErrorAction SilentlyContinue
+    if ($cmd) { $FfmpegPath = $cmd.Source }
+  }
+}
+if ([string]::IsNullOrWhiteSpace($FfmpegPath)) {
+  Write-Warning "ffmpeg was not found in PATH. Merging video+audio will fail. Install ffmpeg (e.g. 'winget install Gyan.FFmpeg') or pass -FfmpegPath <path>."
 }
 
 # 3b. the launcher runs host.py via pythonw.exe/python.exe on PATH at runtime
@@ -75,9 +90,12 @@ foreach ($key in $hosts) {
   if ($LASTEXITCODE -ne 0) { throw "Failed to register native host: $key" }
 }
 
-# 6. persist YTDLP_PATH
+# 6. persist YTDLP_PATH / FFMPEG_PATH
 if (-not [string]::IsNullOrWhiteSpace($YtDlpPath)) {
   [Environment]::SetEnvironmentVariable("YTDLP_PATH", $YtDlpPath, "User")
+}
+if (-not [string]::IsNullOrWhiteSpace($FfmpegPath)) {
+  [Environment]::SetEnvironmentVariable("FFMPEG_PATH", $FfmpegPath, "User")
 }
 
 Write-Host "Installed native host manifest:"
@@ -87,5 +105,9 @@ Write-Host $ExtensionId
 if (-not [string]::IsNullOrWhiteSpace($YtDlpPath)) {
   Write-Host "yt-dlp path:"
   Write-Host $YtDlpPath
+}
+if (-not [string]::IsNullOrWhiteSpace($FfmpegPath)) {
+  Write-Host "ffmpeg path:"
+  Write-Host $FfmpegPath
 }
 Write-Host "Load the unpacked extension from the repository root, then restart the browser."

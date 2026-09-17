@@ -57,12 +57,37 @@ powershell -ExecutionPolicy Bypass -File .\native-host\install-native-host.ps1
 ## 3. Установка native-хоста (macOS / Linux)
 
 ```bash
+./Install-NativeHost.sh
+```
+
+Как и `.bat` на Windows: при наличии .NET 8 SDK соберёт и поставит C#-хост,
+иначе поставит Python-хост (нужны только Python 3.8+, `yt-dlp` и `ffmpeg`,
+компиляция не требуется). Вручную:
+
+```bash
+# Вариант Python (без .NET SDK):
+./native-host/python-host/install-python-host.sh
+# Вариант C# (нужен .NET 8 SDK):
 ./native-host/build-host.sh
 EXTENSION_ID=lgdfehfacdnpknkphkfmmollklciaaal ./native-host/install-native-host.sh
 ```
 
 Манифест ставится во все найденные каталоги `NativeMessagingHosts`
 (Chrome, Chromium, Edge, Brave, Vivaldi, Opera, Yandex).
+
+## Переменные окружения (оба хоста, все ОС)
+
+- `YTDLP_PATH` — путь к `yt-dlp`, если его нет в `PATH`.
+- `FFMPEG_PATH` — путь к `ffmpeg`, если его нет в `PATH` (без него
+  склейка видео+аудио невозможна).
+- `YTDLP_IP_VERSION=4|6` — принудительно зафиксировать семью IP вместо
+  автопробы (по умолчанию хост сам проверяет доступность IPv4/IPv6
+  до YouTube и выбирает рабочую или более быструю).
+- `YTDLP_FORCE_IPV4=1` — старый вариант фиксации IPv4 (оставлен
+  для совместимости).
+- `YTDLP_KEEP_LD=1` — не убирать `LD_LIBRARY_PATH`/`LD_PRELOAD` из окружения
+  дочерних `yt-dlp` (по умолчанию хост их убирает, если они ломают запуск
+  `ffmpeg`, унаследованные от браузера).
 
 ## Форматы (v0.4.x)
 

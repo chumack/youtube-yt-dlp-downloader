@@ -68,6 +68,12 @@ static object StartDownload(JsonElement root, ConcurrentDictionary<string, Downl
   var trackMode = NormalizeTrackMode(root.TryGetProperty("trackMode", out var trackModeProp) ? trackModeProp.GetString() : "orig");
   var dubLang = NormalizeLang(root.TryGetProperty("dubLang", out var dubLangProp) ? dubLangProp.GetString() : "");
   var origLang = NormalizeLang(root.TryGetProperty("origLang", out var origLangProp) ? origLangProp.GetString() : "");
+  // Кроме одиночного MP4 и аудио-оригинала всё собирается через ffmpeg:
+  // без него yt-dlp молча оставит несмерженные куски.
+  if (quality is not ("best-mp4" or "audio-best") && ResolveFfmpegPath() is null)
+  {
+    return new { ok = false, error = "ffmpeg not found. Install ffmpeg or set FFMPEG_PATH." };
+  }
   var targetDir = ResolveDownloadDir(downloadDir);
   var logDir = Path.Combine(targetDir, "yt-dlp-logs");
   Directory.CreateDirectory(logDir);
@@ -107,6 +113,7 @@ static object StartDownload(JsonElement root, ConcurrentDictionary<string, Downl
   {
     psi.ArgumentList.Add(arg);
   }
+  ScrubLoaderEnv(psi);
 
   try
   {
@@ -136,6 +143,14 @@ static JsonDocument DumpInfoJson(string url, bool flat)
   };
 
   psi.ArgumentList.Add("--ignore-config");
+  foreach (var arg in IpVersionArgs())
+  {
+    psi.ArgumentList.Add(arg);
+  }
+  foreach (var arg in FfmpegArgs())
+  {
+    psi.ArgumentList.Add(arg);
+  }
   psi.ArgumentList.Add("--dump-single-json");
   if (flat)
   {
@@ -144,6 +159,7 @@ static JsonDocument DumpInfoJson(string url, bool flat)
   psi.ArgumentList.Add("--skip-download");
   psi.ArgumentList.Add("--no-warnings");
   psi.ArgumentList.Add(url);
+  ScrubLoaderEnv(psi);
 
   using var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start yt-dlp.");
   var stdoutTask = process.StandardOutput.ReadToEndAsync();
@@ -283,7 +299,7 @@ static object ResolveVideos(JsonElement root)
   }
   catch (Exception ex)
   {
-    return new { ok = false, error = ex.Message };
+    return new { ok = false, error = WithBotHint(ex.Message) };
   }
 }
 
@@ -413,7 +429,7 @@ static async Task PumpProcessAsync(Process process, DownloadTask task)
     else
     {
       var raw = string.IsNullOrWhiteSpace(task.LastLine) ? $"yt-dlp exited with code {process.ExitCode}" : task.LastLine;
-      task.Message = WithTrackHint(raw, task);
+      task.Message = WithTrackHint(WithBotHint(raw), task);
       // popup prefers LastLine: put the hint where it is visible
       task.LastLine = task.Message;
     }
@@ -706,9 +722,11 @@ static string[] BuildYtDlpArgs(string url, string outputTemplate, string quality
     format = "best[ext=mp4]/best";
   }
 
-  var args = new List<string>
+  var args = new List<string> { "--ignore-config" };
+  args.AddRange(IpVersionArgs());
+  args.AddRange(FfmpegArgs());
+  args.AddRange(new[]
   {
-    "--ignore-config",
     "--no-overwrites",
     "--newline",
     "--progress",
@@ -716,7 +734,7 @@ static string[] BuildYtDlpArgs(string url, string outputTemplate, string quality
     format,
     "-o",
     outputTemplate
-  };
+  });
   args.AddRange(mergeArgs);
   args.AddRange(streamArgs);
 
@@ -769,6 +787,214 @@ static string ResolveYtDlpPath()
   }
 
   return "yt-dlp";
+}
+
+static string? FindOnPath(string name)
+{
+  var path = Environment.GetEnvironmentVariable("PATH") ?? "";
+  var candidates = OperatingSystem.IsWindows()
+    ? new[] { name, name + ".exe" }
+    : new[] { name };
+  foreach (var dir in path.Split(Path.PathSeparator))
+  {
+    foreach (var candidate in candidates)
+    {
+      try
+      {
+        var full = Path.Combine(dir.Trim(), candidate);
+        if (File.Exists(full))
+        {
+          return full;
+        }
+      }
+      catch
+      {
+      }
+    }
+  }
+  return null;
+}
+
+static string? ResolveFfmpegPath()
+{
+  // yt-dlp ищет ffmpeg по своему PATH; из-под браузера этот поиск уже
+  // подводил, оставляя загрузки несмерженными. Абсолютный путь через
+  // --ffmpeg-location делает склейку детерминированной.
+  var envPath = Environment.GetEnvironmentVariable("FFMPEG_PATH");
+  if (!string.IsNullOrWhiteSpace(envPath))
+  {
+    if (File.Exists(envPath))
+    {
+      return envPath;
+    }
+    var foundEnv = FindOnPath(envPath);
+    if (foundEnv is not null)
+    {
+      return foundEnv;
+    }
+  }
+  return FindOnPath("ffmpeg");
+}
+
+static string[] FfmpegArgs()
+{
+  var path = ResolveFfmpegPath();
+  return path is null ? Array.Empty<string>() : new[] { "--ffmpeg-location", path };
+}
+
+static void ScrubLoaderEnv(ProcessStartInfo psi)
+{
+  // Браузер может подмешивать в окружение каталоги со своими bundled-
+  // библиотеками (LD_LIBRARY_PATH/LD_PRELOAD) — под ними системный
+  // ffmpeg/yt-dlp иногда не запускается. YTDLP_KEEP_LD=1 отключает чистку.
+  if (Environment.GetEnvironmentVariable("YTDLP_KEEP_LD") == "1")
+  {
+    return;
+  }
+  psi.Environment.Remove("LD_LIBRARY_PATH");
+  psi.Environment.Remove("LD_PRELOAD");
+}
+
+static double? TcpConnectTime(System.Net.Sockets.AddressFamily family)
+{
+  var probeHost = Environment.GetEnvironmentVariable("YTDLP_IP_PROBE_HOST");
+  if (string.IsNullOrWhiteSpace(probeHost))
+  {
+    probeHost = "www.youtube.com";
+  }
+  try
+  {
+    var addresses = System.Net.Dns.GetHostAddresses(probeHost)
+      .Where(a => a.AddressFamily == family).Take(3).ToArray();
+    double? best = null;
+    var sw = new Stopwatch();
+    foreach (var addr in addresses)
+    {
+      using var client = new System.Net.Sockets.TcpClient(family);
+      sw.Restart();
+      try
+      {
+        var connectTask = client.ConnectAsync(addr, 443);
+        if (!connectTask.Wait(TimeSpan.FromSeconds(3)))
+        {
+          continue;
+        }
+        sw.Stop();
+        var dt = sw.Elapsed.TotalSeconds;
+        if (best is null || dt < best)
+        {
+          best = dt;
+        }
+      }
+      catch
+      {
+      }
+    }
+    return best;
+  }
+  catch
+  {
+    return null;
+  }
+}
+
+static double? ReadProbeLatency(JsonElement root, string name)
+{
+  if (root.TryGetProperty(name, out var prop) && prop.ValueKind == JsonValueKind.Number
+      && prop.TryGetDouble(out var value))
+  {
+    return value;
+  }
+  return null;
+}
+
+static (double? V4, double? V6) ProbeIpVersions()
+{
+  // Тот же кэш, что у Python-хоста: общий файл в temp, TTL 5 минут.
+  const long ttlSeconds = 300;
+  var cacheFile = Path.Combine(Path.GetTempPath(), "yt_dlp_host_ipprobe.json");
+  try
+  {
+    using var doc = JsonDocument.Parse(File.ReadAllText(cacheFile));
+    var at = doc.RootElement.TryGetProperty("at", out var atProp) && atProp.TryGetDouble(out var atVal) ? atVal : 0;
+    if (DateTimeOffset.UtcNow.ToUnixTimeSeconds() - at < ttlSeconds)
+    {
+      return (ReadProbeLatency(doc.RootElement, "v4"), ReadProbeLatency(doc.RootElement, "v6"));
+    }
+  }
+  catch
+  {
+  }
+  var v4 = TcpConnectTime(System.Net.Sockets.AddressFamily.InterNetwork);
+  var v6 = TcpConnectTime(System.Net.Sockets.AddressFamily.InterNetworkV6);
+  try
+  {
+    File.WriteAllText(cacheFile, JsonSerializer.Serialize(new
+    {
+      at = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+      v4,
+      v6
+    }));
+  }
+  catch
+  {
+  }
+  return (v4, v6);
+}
+
+static string[] IpVersionArgs()
+{
+  // Проба обеих семей и фиксация рабочей/быстрой; см. host.py.
+  var pinned = Environment.GetEnvironmentVariable("YTDLP_IP_VERSION")?.Trim();
+  var legacy = Environment.GetEnvironmentVariable("YTDLP_FORCE_IPV4");
+  if (pinned == "4" || legacy == "1")
+  {
+    return new[] { "--force-ipv4" };
+  }
+  if (pinned == "6")
+  {
+    return new[] { "--force-ipv6" };
+  }
+  if (legacy == "0")
+  {
+    return Array.Empty<string>();
+  }
+  var (v4, v6) = ProbeIpVersions();
+  if (v4.HasValue && v6.HasValue)
+  {
+    return v6 <= v4 ? new[] { "--force-ipv6" } : new[] { "--force-ipv4" };
+  }
+  if (v6.HasValue)
+  {
+    return new[] { "--force-ipv6" };
+  }
+  if (v4.HasValue)
+  {
+    return new[] { "--force-ipv4" };
+  }
+  return Array.Empty<string>();
+}
+
+static string WithBotHint(string text)
+{
+  if (string.IsNullOrEmpty(text))
+  {
+    return text;
+  }
+  string[] patterns = new[]
+  {
+    "sign in to confirm", "not a bot", "needs to be reloaded", "verify you are",
+    "confirm you", "http error 429", "too many requests", "po token", "login required"
+  };
+  foreach (var pattern in patterns)
+  {
+    if (text.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+    {
+      return "YouTube защищается от ботов: включи «Использовать вход в браузере», "
+        + "войди в аккаунт YouTube в этом браузере и повтори. " + text;
+    }
+  }
+  return text;
 }
 
 static string? ReadMessage(Stream stream)
