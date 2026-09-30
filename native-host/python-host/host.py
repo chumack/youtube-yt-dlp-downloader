@@ -43,7 +43,7 @@ from urllib.parse import urlparse
 HOST_NAME = "com.fengj.youtube_ytdlp"
 # Версия протокола хоста. Попап сверяет её с EXPECTED_HOST_VERSION и просит
 # переустановить хост при расхождении (иначе новые функции молча не работают).
-HOST_VERSION = "0.4.6"
+HOST_VERSION = "0.4.8"
 YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
 RESOLVE_TIMEOUT = 60
 OUTPUT_TEMPLATE = "%(playlist_index&{} - |)s%(title).120B [%(id)s].%(ext)s"
@@ -89,6 +89,7 @@ def now_iso():
 
 # ---------------------------------------------------------------- protocol
 
+
 def read_message():
     raw_len = STDIN.read(4)
     if len(raw_len) < 4:
@@ -118,6 +119,7 @@ def with_request_id(request_id, payload):
 
 
 # ---------------------------------------------------------------- helpers
+
 
 def is_youtube_url(value):
     try:
@@ -250,7 +252,9 @@ def _try_ffmpeg(path, env):
     except Exception as ex:
         return (False, "failed to start: %s" % ex)
     if proc.returncode != 0:
-        tail = (proc.stdout or b"").decode("utf-8", errors="replace").strip().splitlines()
+        tail = (
+            (proc.stdout or b"").decode("utf-8", errors="replace").strip().splitlines()
+        )
         tail = " / ".join(tail[-3:]) if tail else "no output"
         return (False, "exit %s: %s" % (proc.returncode, tail))
     return (True, "ok")
@@ -289,8 +293,11 @@ def check_ffmpeg():
         if ok:
             result = (True, "%s (%s)" % (path, detail))
         else:
-            result = (False, "ffmpeg at %s does not run (%s). "
-                      "Install a working ffmpeg or set FFMPEG_PATH" % (path, detail))
+            result = (
+                False,
+                "ffmpeg at %s does not run (%s). "
+                "Install a working ffmpeg or set FFMPEG_PATH" % (path, detail),
+            )
     _ffmpeg_check_cache["result"] = result
     return result
 
@@ -306,8 +313,9 @@ _IP_PROBE_FILE = os.path.join(tempfile.gettempdir(), "yt_dlp_host_ipprobe.json")
 def _tcp_connect_time(family, timeout):
     """Fastest TCP connect time to the probe host for one family, or None."""
     try:
-        infos = socket.getaddrinfo(IP_PROBE_HOST, IP_PROBE_PORT,
-                                   family, socket.SOCK_STREAM)
+        infos = socket.getaddrinfo(
+            IP_PROBE_HOST, IP_PROBE_PORT, family, socket.SOCK_STREAM
+        )
     except Exception:
         return None
     best = None
@@ -361,8 +369,10 @@ def probe_ip_versions():
     seconds. Both families are probed in parallel.
     """
     now = time.monotonic()
-    if (_ip_probe_cache["result"] is not None
-            and now - _ip_probe_cache["at"] < IP_PROBE_TTL):
+    if (
+        _ip_probe_cache["result"] is not None
+        and now - _ip_probe_cache["at"] < IP_PROBE_TTL
+    ):
         return _ip_probe_cache["result"]
     shared = _read_probe_file()
     if shared is not None:
@@ -384,9 +394,13 @@ def probe_ip_versions():
     _ip_probe_cache["at"] = now
     _ip_probe_cache["result"] = result
     _write_probe_file(result)
-    diag("ip probe v4=%s v6=%s" % (
-        ("%.3fs" % result[0]) if result[0] is not None else "fail",
-        ("%.3fs" % result[1]) if result[1] is not None else "fail"))
+    diag(
+        "ip probe v4=%s v6=%s"
+        % (
+            ("%.3fs" % result[0]) if result[0] is not None else "fail",
+            ("%.3fs" % result[1]) if result[1] is not None else "fail",
+        )
+    )
     return result
 
 
@@ -417,8 +431,13 @@ def ip_version_args():
 
 
 def base_args():
-    return (["--ignore-config"] + ip_version_args() + ffmpeg_args()
-            + impersonate_args() + js_runtime_args())
+    return (
+        ["--ignore-config"]
+        + ip_version_args()
+        + ffmpeg_args()
+        + impersonate_args()
+        + js_runtime_args()
+    )
 
 
 BOT_PATTERNS = (
@@ -451,8 +470,10 @@ def with_track_hint(text, task):
     mode = str(task.get("TrackMode") or "orig").lower()
     dub = str(task.get("DubLang") or "")
     if mode in ("dub", "dual") and dub:
-        return ("Дубляж %s недоступен для этого видео: возможно, его нет "
-                "или YouTube отдал не все форматы. " % dub.upper()) + text
+        return (
+            "Дубляж %s недоступен для этого видео: возможно, его нет "
+            "или YouTube отдал не все форматы. " % dub.upper()
+        ) + text
     return text
 
 
@@ -566,6 +587,7 @@ def snapshot(task):
 
 # ---------------------------------------------------------------- resolve
 
+
 def resolve_entry_url(entry):
     webpage_url = get_str(entry, "webpage_url")
     if webpage_url:
@@ -587,9 +609,16 @@ def action_resolve(root):
     try:
         info = dump_info_json(url, cookie_extra, flat=True)
     except FileNotFoundError:
-        return {"ok": False, "error": "yt-dlp not found. Install yt-dlp or set YTDLP_PATH."}
+        return {
+            "ok": False,
+            "error": "yt-dlp not found. Install yt-dlp or set YTDLP_PATH.",
+        }
     except RuntimeError as ex:
-        return {"ok": False, "error": with_bot_hint(str(ex)), "cookiesFrom": cookies_from}
+        return {
+            "ok": False,
+            "error": with_bot_hint(str(ex)),
+            "cookiesFrom": cookies_from,
+        }
     except Exception as ex:
         return {"ok": False, "error": str(ex)}
 
@@ -655,6 +684,7 @@ def action_resolve(root):
 
 # ---------------------------------------------------------------- download
 
+
 def normalize_quality(value):
     if value == "audio":
         return "audio-mp3"
@@ -670,6 +700,40 @@ def normalize_vcodec(value):
     if v in ("avc", "avc1", "h264"):
         return "avc"
     return "auto"
+
+
+def normalize_acodec(value):
+    """Аудиокодек для видео: auto | aac | opus | mp3.
+
+    aac/opus — нативный выбор дорожки YouTube без перекодирования.
+    mp3 — перекодирование через ffmpeg (Merger -c:a libmp3lame).
+    """
+    v = str(value or "auto").strip().lower()
+    if v in ("m4a", "mp4a", "aac"):
+        return "aac"
+    if v in ("opus", "ogg"):
+        return "opus"
+    if v == "mp3":
+        return "mp3"
+    return "auto"
+
+
+def acodec_filter(acodec):
+    # YouTube отдаёт opus как "opus", AAC как "mp4a.40.x" — ловим по подстроке.
+    # mp3 нативно нет — фильтр пустой, кодек задаётся перекодированием в Merger.
+    if acodec == "opus":
+        return "[acodec*=opus]"
+    if acodec == "aac":
+        return "[acodec*=mp4a]"
+    return ""
+
+
+def merger_mp3_parts(abitrate):
+    """Части Merger-аргументов для перекодирования аудио в MP3."""
+    parts = ["-c:v copy", "-c:a libmp3lame"]
+    if abitrate and abitrate != "0":
+        parts.append("-b:a %s" % abitrate)
+    return parts
 
 
 def vcodec_filter(vcodec):
@@ -711,14 +775,46 @@ LANG_RE = re.compile(r"^[a-z]{2,3}(?:-[A-Za-z]+)*$")
 # ISO 639-1 -> ISO 639-2/T для тегов языка в контейнере (ffmpeg).
 # Неизвестные коды не пишем вовсе, чтобы не ронять слияние.
 ISO639_2 = {
-    "ru": "rus", "uk": "ukr", "be": "bel", "en": "eng", "es": "spa",
-    "pt": "por", "de": "deu", "fr": "fra", "it": "ita", "pl": "pol",
-    "nl": "nld", "tr": "tur", "ar": "ara", "hi": "hin", "ja": "jpn",
-    "ko": "kor", "zh": "zho", "iw": "heb", "he": "heb", "pa": "pan",
-    "bn": "ben", "ta": "tam", "te": "tel", "ml": "mal", "mr": "mar",
-    "id": "ind", "ms": "msa", "vi": "vie", "th": "tha", "el": "ell",
-    "hu": "hun", "cs": "ces", "sk": "slk", "ro": "ron", "bg": "bul",
-    "sr": "srp", "hr": "hrv", "da": "dan", "fi": "fin", "no": "nor",
+    "ru": "rus",
+    "uk": "ukr",
+    "be": "bel",
+    "en": "eng",
+    "es": "spa",
+    "pt": "por",
+    "de": "deu",
+    "fr": "fra",
+    "it": "ita",
+    "pl": "pol",
+    "nl": "nld",
+    "tr": "tur",
+    "ar": "ara",
+    "hi": "hin",
+    "ja": "jpn",
+    "ko": "kor",
+    "zh": "zho",
+    "iw": "heb",
+    "he": "heb",
+    "pa": "pan",
+    "bn": "ben",
+    "ta": "tam",
+    "te": "tel",
+    "ml": "mal",
+    "mr": "mar",
+    "id": "ind",
+    "ms": "msa",
+    "vi": "vie",
+    "th": "tha",
+    "el": "ell",
+    "hu": "hun",
+    "cs": "ces",
+    "sk": "slk",
+    "ro": "ron",
+    "bg": "bul",
+    "sr": "srp",
+    "hr": "hrv",
+    "da": "dan",
+    "fi": "fin",
+    "no": "nor",
     "sv": "swe",
 }
 
@@ -769,8 +865,12 @@ def extract_audio_tracks(info):
             continue
         note = str(f.get("format_note") or "")
         if lang not in by_lang:
-            by_lang[lang] = {"lang": lang, "label": note or lang,
-                             "original": False, "_note": note}
+            by_lang[lang] = {
+                "lang": lang,
+                "label": note or lang,
+                "original": False,
+                "_note": note,
+            }
     tracks = []
     orig_lang = ""
     for lang, t in by_lang.items():
@@ -820,8 +920,18 @@ def dump_info_json(url, cookie_extra, flat):
     return json.loads((stdout or b"").decode("utf-8", errors="replace"))
 
 
-def build_ytdlp_args(url, output_template, quality, playlist_mode, vcodec="auto",
-                     abitrate="0", track_mode="orig", dub_lang="", orig_lang=""):
+def build_ytdlp_args(
+    url,
+    output_template,
+    quality,
+    playlist_mode,
+    vcodec="auto",
+    abitrate="0",
+    track_mode="orig",
+    dub_lang="",
+    orig_lang="",
+    acodec="auto",
+):
     quality = normalize_quality(quality)
     vcodec = normalize_vcodec(vcodec)
     # Кодек применяется только к видео; для аудио игнорируется.
@@ -833,9 +943,18 @@ def build_ytdlp_args(url, output_template, quality, playlist_mode, vcodec="auto"
     track_mode = normalize_track_mode(track_mode)
     dub_lang = normalize_lang(dub_lang)
     orig_lang = normalize_lang(orig_lang)
+    # Аудиокодек — только для видео; для аудио-only формат уже задан пресетом.
+    is_audio = quality.startswith("audio-")
+    acodec = "auto" if is_audio else normalize_acodec(acodec)
+    is_mp3 = acodec == "mp3" and not is_audio
+    # Для MP3 нативного фильтра нет: берём лучшее аудио и перекодируем в Merger.
+    acodec_f = "" if is_mp3 else acodec_filter(acodec)
+    mp3_parts = merger_mp3_parts(abitrate) if is_mp3 else []
     # "Лучший MP4 одним файлом" — всегда оригинал; dual для аудио
     # невозможен (один аудиофайл) — скачиваем дубляж отдельно.
-    is_audio = quality.startswith("audio-")
+    # best-mp4 + MP3: одиночный пресет нельзя перекодировать через Merger,
+    # поэтому качаем раздельные дорожки как в "best" и сводим в MP4 с MP3.
+    best_mp4_as_best = quality == "best-mp4" and is_mp3
     if quality == "best-mp4":
         track_mode = "orig"
     if is_audio and track_mode == "dual":
@@ -843,8 +962,16 @@ def build_ytdlp_args(url, output_template, quality, playlist_mode, vcodec="auto"
     if track_mode in ("dub", "dual") and not dub_lang:
         track_mode = "orig"
 
+    # Аудиоселектор: bestaudio + фильтр кодека + фильтр языка.
+    # Без выбора (auto) — как раньше: просто bestaudio (обычно opus).
+    def audio_sel(lang_f):
+        return "bestaudio%s%s" % (acodec_f, lang_f)
+
+    audio_best = audio_sel("")
     dub_f = "[language=%s]" % dub_lang if track_mode in ("dub", "dual") else ""
     orig_f = "[language=%s]" % orig_lang if (track_mode == "dual" and orig_lang) else ""
+    dub_sel = audio_sel(dub_f)
+    orig_sel = audio_sel(orig_f)
 
     fmt = ""
     merge_args = []
@@ -856,56 +983,71 @@ def build_ytdlp_args(url, output_template, quality, playlist_mode, vcodec="auto"
         h = VIDEO_HEIGHTS[quality]
         if track_mode == "dual":
             # Дубляж — первой дорожкой, оригинал — второй.
-            fmt = (
-                "bestvideo[height<=%d]%s+bestaudio%s+bestaudio%s/"
-                "bestvideo%s+bestaudio%s+bestaudio%s"
-                % (h, codec, dub_f, orig_f, codec, dub_f, orig_f)
+            fmt = "bestvideo[height<=%d]%s+%s+%s/bestvideo%s+%s+%s" % (
+                h,
+                codec,
+                dub_sel,
+                orig_sel,
+                codec,
+                dub_sel,
+                orig_sel,
             )
             merge_args = ["--merge-output-format", "mkv"]
             stream_args = ["--audio-multistreams"]
-            pp_args = dual_pp_args(dub_lang, orig_lang)
+            pp_args = dual_pp_args(dub_lang, orig_lang, mp3_parts)
         elif track_mode == "dub":
-            fmt = (
-                "bestvideo[height<=%d]%s+bestaudio%s/"
-                "bestvideo%s+bestaudio%s" % (h, codec, dub_f, codec, dub_f)
+            fmt = "bestvideo[height<=%d]%s+%s/bestvideo%s+%s" % (
+                h,
+                codec,
+                dub_sel,
+                codec,
+                dub_sel,
             )
             merge_args = ["--merge-output-format", "mp4"]
-        elif codec:
+            if mp3_parts:
+                pp_args = merger_pp_args(mp3_parts)
+        elif codec or acodec_f or is_mp3:
             fmt = (
-                "bestvideo[height<=%d]%s+bestaudio/"
+                "bestvideo[height<=%d]%s+%s/"
                 "bestvideo[height<=%d]%s/"
-                "bestvideo[height<=%d]+bestaudio/"
-                "best[height<=%d]/best" % (h, codec, h, codec, h, h)
+                "bestvideo[height<=%d]+%s/"
+                "best[height<=%d]/best"
+                % (h, codec, audio_best, h, codec, h, audio_best, h)
             )
             merge_args = ["--merge-output-format", "mp4"]
+            if mp3_parts:
+                pp_args = merger_pp_args(mp3_parts)
         else:
-            fmt = (
-                "bestvideo[height<=%d]+bestaudio/"
-                "best[height<=%d]/best" % (h, h)
-            )
+            fmt = "bestvideo[height<=%d]+%s/best[height<=%d]/best" % (h, audio_best, h)
             merge_args = ["--merge-output-format", "mp4"]
-    elif quality == "best":
+    elif quality == "best" or best_mp4_as_best:
         if track_mode == "dual":
             # Дубляж — первой дорожкой, оригинал — второй.
-            fmt = (
-                "bestvideo%s+bestaudio%s+bestaudio%s/"
-                "bestvideo+bestaudio+bestaudio" % (codec, dub_f, orig_f)
+            fmt = "bestvideo%s+%s+%s/bestvideo+bestaudio+bestaudio" % (
+                codec,
+                dub_sel,
+                orig_sel,
             )
             merge_args = ["--merge-output-format", "mkv"]
             stream_args = ["--audio-multistreams"]
-            pp_args = dual_pp_args(dub_lang, orig_lang)
+            pp_args = dual_pp_args(dub_lang, orig_lang, mp3_parts)
         elif track_mode == "dub":
-            fmt = "bestvideo%s+bestaudio%s/bestvideo+bestaudio" % (codec, dub_f)
+            fmt = "bestvideo%s+%s/bestvideo+bestaudio" % (codec, dub_sel)
             merge_args = ["--merge-output-format", "mp4"]
-        elif codec:
-            fmt = (
-                "bestvideo%s+bestaudio/"
-                "bestvideo%s/"
-                "bestvideo+bestaudio/best" % (codec, codec)
+            if mp3_parts:
+                pp_args = merger_pp_args(mp3_parts)
+        elif codec or acodec_f or is_mp3:
+            fmt = "bestvideo%s+%s/bestvideo%s/bestvideo+%s/best" % (
+                codec,
+                audio_best,
+                codec,
+                audio_best,
             )
             merge_args = ["--merge-output-format", "mp4"]
+            if mp3_parts:
+                pp_args = merger_pp_args(mp3_parts)
         else:
-            fmt = "bestvideo+bestaudio/best"
+            fmt = "bestvideo+%s/best" % audio_best
             merge_args = ["--merge-output-format", "mp4"]
     elif quality == "best-mp4":
         if codec:
@@ -949,13 +1091,8 @@ def build_ytdlp_args(url, output_template, quality, playlist_mode, vcodec="auto"
     return args
 
 
-def dual_pp_args(dub_lang, orig_lang):
-    """Теги языка и флаг default для dual-режима.
-
-    Первая дорожка (дубляж) помечается своим языком и default,
-    вторая (оригинал) — своим языком без default. Неизвестные коды
-    не пишем вовсе, чтобы не ронять слияние.
-    """
+def dual_merger_parts(dub_lang, orig_lang):
+    """Части Merger-аргументов для dual-режима (языки + default-флаги)."""
     parts = []
     dub_iso = lang639_2(dub_lang)
     if dub_iso:
@@ -965,7 +1102,23 @@ def dual_pp_args(dub_lang, orig_lang):
     if orig_iso:
         parts.append("-metadata:s:a:1 language=%s" % orig_iso)
     parts.append("-disposition:a:1 0")
+    return parts
+
+
+def dual_pp_args(dub_lang, orig_lang, extra_parts=None):
+    """Теги языка и флаг default для dual-режима.
+
+    Первая дорожка (дубляж) помечается своим языком и default,
+    вторая (оригинал) — своим языком без default. Неизвестные коды
+    не пишем вовсе, чтобы не ронять слияние. extra_parts (например,
+    перекодирование в MP3) дописываются в тот же Merger-вызов.
+    """
+    parts = dual_merger_parts(dub_lang, orig_lang) + list(extra_parts or [])
     return ["--postprocessor-args", "Merger:" + " ".join(parts)]
+
+
+def merger_pp_args(extra_parts):
+    return ["--postprocessor-args", "Merger:" + " ".join(extra_parts)]
 
 
 PCT_RE = re.compile(r"\[download\]\s+(\d+(?:\.\d+)?)%")
@@ -1064,13 +1217,18 @@ def action_start(root):
     playlist_mode = root.get("playlistMode") or "single"
     quality = normalize_quality(root.get("quality") or "best-mp4")
     vcodec = normalize_vcodec(root.get("vcodec") or "auto")
+    acodec = normalize_acodec(root.get("acodec") or "auto")
     abitrate = normalize_abitrate(root.get("abitrate") or "0")
     track_mode = normalize_track_mode(root.get("trackMode") or "orig")
     dub_lang = normalize_lang(root.get("dubLang") or "")
     orig_lang = normalize_lang(root.get("origLang") or "")
     # Кроме одиночного MP4 и аудио-оригинала всё собирается через ffmpeg:
     # без него yt-dlp молча оставит несмерженные куски.
-    if quality not in ("best-mp4", "audio-best"):
+    # MP3 для видео — тоже через ffmpeg (перекодирование в Merger).
+    needs_ffmpeg = quality not in ("best-mp4", "audio-best") or (
+        quality == "best-mp4" and acodec == "mp3" and not quality.startswith("audio-")
+    )
+    if needs_ffmpeg:
         ffmpeg_ok, ffmpeg_detail = check_ffmpeg()
         if not ffmpeg_ok:
             return {"ok": False, "error": "ffmpeg problem: %s." % ffmpeg_detail}
@@ -1090,6 +1248,7 @@ def action_start(root):
         "DownloadDir": target_dir,
         "Quality": quality,
         "Vcodec": vcodec,
+        "Acodec": acodec,
         "Abitrate": abitrate,
         "TrackMode": track_mode,
         "DubLang": dub_lang,
@@ -1111,8 +1270,18 @@ def action_start(root):
     with tasks_lock:
         tasks[task_id] = task
 
-    args = build_ytdlp_args(url, output_template, quality, playlist_mode, vcodec,
-                            abitrate, track_mode, dub_lang, orig_lang)
+    args = build_ytdlp_args(
+        url,
+        output_template,
+        quality,
+        playlist_mode,
+        vcodec,
+        abitrate,
+        track_mode,
+        dub_lang,
+        orig_lang,
+        acodec,
+    )
     # --cookies* must come before the URL (order is free, keep them grouped)
     args = args[:-1] + cookie_extra + args[-1:]
     try:
@@ -1147,9 +1316,26 @@ def action_start(root):
     with tasks_lock:
         task["ProcessId"] = proc.pid
         task["Status"] = "running"
-    diag("start id=%s pid=%s quality=%s vcodec=%s abitrate=%s track=%s dub=%s cookiesFrom=%s ffmpeg=%s ytdlp=%s" % (task_id, proc.pid, quality, vcodec, abitrate, track_mode, dub_lang, cookies_from, resolve_ffmpeg_path(), resolve_ytdlp_path()))
+    diag(
+        "start id=%s pid=%s quality=%s vcodec=%s acodec=%s abitrate=%s track=%s dub=%s cookiesFrom=%s ffmpeg=%s ytdlp=%s"
+        % (
+            task_id,
+            proc.pid,
+            quality,
+            vcodec,
+            acodec,
+            abitrate,
+            track_mode,
+            dub_lang,
+            cookies_from,
+            resolve_ffmpeg_path(),
+            resolve_ytdlp_path(),
+        )
+    )
     diag("argv: %s" % " ".join([resolve_ytdlp_path()] + args))
-    t = threading.Thread(target=pump_process, args=(proc, task_id, log_file), daemon=True)
+    t = threading.Thread(
+        target=pump_process, args=(proc, task_id, log_file), daemon=True
+    )
     t.start()
     return {"ok": True, "task": snapshot(task)}
 
@@ -1172,8 +1358,11 @@ def action_clear(root):
     """
     removed = 0
     with tasks_lock:
-        finished = [tid for tid, t in tasks.items()
-                    if t.get("Status") in ("done", "error", "canceled")]
+        finished = [
+            tid
+            for tid, t in tasks.items()
+            if t.get("Status") in ("done", "error", "canceled")
+        ]
         for tid in finished:
             del tasks[tid]
             removed += 1
@@ -1183,7 +1372,12 @@ def action_clear(root):
             reverse=True,
         )
     diag("clear removed=%d left=%d" % (removed, len(ordered)))
-    return {"ok": True, "hostVersion": HOST_VERSION, "removed": removed, "tasks": ordered}
+    return {
+        "ok": True,
+        "hostVersion": HOST_VERSION,
+        "removed": removed,
+        "tasks": ordered,
+    }
 
 
 def action_cancel(root):
@@ -1219,6 +1413,7 @@ def action_cancel(root):
 
 
 # ---------------------------------------------------------------- main loop
+
 
 def main():
     while True:

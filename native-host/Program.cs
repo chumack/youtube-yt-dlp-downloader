@@ -5,7 +5,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 
 var tasks = new ConcurrentDictionary<string, DownloadTask>();
-const string HostVersion = "0.4.6";
+const string HostVersion = "0.4.8";
 var input = Console.OpenStandardInput();
 var output = Console.OpenStandardOutput();
 var outputLock = new object();
@@ -64,13 +64,17 @@ static object StartDownload(JsonElement root, ConcurrentDictionary<string, Downl
   var playlistMode = root.TryGetProperty("playlistMode", out var playlistProp) ? playlistProp.GetString() : "single";
   var quality = NormalizeQuality(root.TryGetProperty("quality", out var qualityProp) ? qualityProp.GetString() : "best-mp4");
   var vcodec = NormalizeVcodec(root.TryGetProperty("vcodec", out var vcodecProp) ? vcodecProp.GetString() : "auto");
+  var acodec = NormalizeAcodec(root.TryGetProperty("acodec", out var acodecProp) ? acodecProp.GetString() : "auto");
   var abitrate = NormalizeAbitrate(root.TryGetProperty("abitrate", out var abitrateProp) ? abitrateProp.GetString() : "0");
   var trackMode = NormalizeTrackMode(root.TryGetProperty("trackMode", out var trackModeProp) ? trackModeProp.GetString() : "orig");
   var dubLang = NormalizeLang(root.TryGetProperty("dubLang", out var dubLangProp) ? dubLangProp.GetString() : "");
   var origLang = NormalizeLang(root.TryGetProperty("origLang", out var origLangProp) ? origLangProp.GetString() : "");
   // Кроме одиночного MP4 и аудио-оригинала всё собирается через ffmpeg:
   // без него yt-dlp молча оставит несмерженные куски.
-  if (quality is not ("best-mp4" or "audio-best") && ResolveFfmpegPath() is null)
+  // MP3 для видео — тоже через ffmpeg (перекодирование в Merger).
+  var needsFfmpeg = quality is not ("best-mp4" or "audio-best") ||
+    (quality == "best-mp4" && acodec == "mp3" && !quality.StartsWith("audio-"));
+  if (needsFfmpeg && ResolveFfmpegPath() is null)
   {
     return new { ok = false, error = "ffmpeg not found. Install ffmpeg or set FFMPEG_PATH." };
   }
@@ -88,6 +92,7 @@ static object StartDownload(JsonElement root, ConcurrentDictionary<string, Downl
     DownloadDir = targetDir,
     Quality = quality,
     Vcodec = vcodec,
+    Acodec = acodec,
     Abitrate = abitrate,
     TrackMode = trackMode,
     DubLang = dubLang,
@@ -99,7 +104,7 @@ static object StartDownload(JsonElement root, ConcurrentDictionary<string, Downl
   tasks[id] = task;
 
   var args = BuildYtDlpArgs(url, outputTemplate, task.Quality, task.PlaylistMode, task.Vcodec,
-    task.Abitrate, task.TrackMode, task.DubLang, origLang);
+    task.Abitrate, task.TrackMode, task.DubLang, origLang, task.Acodec);
   var psi = new ProcessStartInfo
   {
     FileName = ResolveYtDlpPath(),
@@ -490,6 +495,33 @@ static string NormalizeVcodec(string? value)
   return "auto";
 }
 
+static string NormalizeAcodec(string? value)
+{
+  var v = (value ?? "auto").Trim().ToLowerInvariant();
+  if (v is "m4a" or "mp4a" or "aac") return "aac";
+  if (v is "opus" or "ogg") return "opus";
+  if (v is "mp3") return "mp3";
+  return "auto";
+}
+
+static string AcodecFilter(string acodec) => acodec switch
+{
+  "opus" => "[acodec*=opus]",
+  "aac" => "[acodec*=mp4a]",
+  // MP3 нативно нет — перекодирование через Merger, фильтр пустой.
+  _ => ""
+};
+
+static string[] MergerMp3Parts(string abitrate)
+{
+  var parts = new List<string> { "-c:v copy", "-c:a libmp3lame" };
+  if (!string.IsNullOrEmpty(abitrate) && abitrate != "0")
+  {
+    parts.Add($"-b:a {abitrate}");
+  }
+  return parts.ToArray();
+}
+
 static string VcodecFilter(string vcodec) => vcodec switch
 {
   "av1" => "[vcodec^=av01]",
@@ -571,7 +603,7 @@ static string Lang639_2(string? code)
   };
 }
 
-static string[] DualPpArgs(string dubLang, string origLang)
+static string[] DualMergerParts(string dubLang, string origLang)
 {
   var parts = new List<string>();
   var dubIso = Lang639_2(dubLang);
@@ -586,7 +618,19 @@ static string[] DualPpArgs(string dubLang, string origLang)
     parts.Add($"-metadata:s:a:1 language={origIso}");
   }
   parts.Add("-disposition:a:1 0");
+  return parts.ToArray();
+}
+
+static string[] DualPpArgs(string dubLang, string origLang, string[]? extraParts = null)
+{
+  var parts = new List<string>(DualMergerParts(dubLang, origLang));
+  if (extraParts is not null) parts.AddRange(extraParts);
   return new[] { "--postprocessor-args", "Merger:" + string.Join(" ", parts) };
+}
+
+static string[] MergerPpArgs(string[] extraParts)
+{
+  return new[] { "--postprocessor-args", "Merger:" + string.Join(" ", extraParts) };
 }
 
 static string WithTrackHint(string? text, DownloadTask task)
@@ -605,7 +649,7 @@ static string WithTrackHint(string? text, DownloadTask task)
 }
 
 static string[] BuildYtDlpArgs(string url, string outputTemplate, string quality, string playlistMode, string vcodec = "auto",
-  string abitrate = "0", string trackMode = "orig", string dubLang = "", string origLang = "")
+  string abitrate = "0", string trackMode = "orig", string dubLang = "", string origLang = "", string acodec = "auto")
 {
   quality = NormalizeQuality(quality);
   vcodec = NormalizeVcodec(vcodec);
@@ -617,8 +661,17 @@ static string[] BuildYtDlpArgs(string url, string outputTemplate, string quality
   trackMode = NormalizeTrackMode(trackMode);
   dubLang = NormalizeLang(dubLang);
   origLang = NormalizeLang(origLang);
+  acodec = isAudio ? "auto" : NormalizeAcodec(acodec);
+  var isMp3 = acodec == "mp3" && !isAudio;
+  var acodecF = isMp3 ? "" : AcodecFilter(acodec);
+  var mp3Parts = isMp3 ? MergerMp3Parts(abitrate) : Array.Empty<string>();
+  var bestMp4AsBest = quality == "best-mp4" && isMp3;
+  string AudioSel(string langF) => $"bestaudio{acodecF}{langF}";
+  var audioBest = AudioSel("");
   // "Лучший MP4 одним файлом" — всегда оригинал; dual для аудио
   // невозможен — скачиваем дубляж отдельно.
+  // best-mp4 + MP3: одиночный пресет нельзя перекодировать через Merger,
+  // качаем раздельные дорожки как в "best" и сводим в MP4 с MP3.
   if (quality == "best-mp4")
   {
     trackMode = "orig";
@@ -634,6 +687,8 @@ static string[] BuildYtDlpArgs(string url, string outputTemplate, string quality
 
   var dubF = (trackMode == "dub" || trackMode == "dual") ? $"[language={dubLang}]" : "";
   var origF = (trackMode == "dual" && !string.IsNullOrEmpty(origLang)) ? $"[language={origLang}]" : "";
+  var dubSel = AudioSel(dubF);
+  var origSel = AudioSel(origF);
 
   string format;
   var mergeArgs = new List<string>();
@@ -647,49 +702,61 @@ static string[] BuildYtDlpArgs(string url, string outputTemplate, string quality
     if (trackMode == "dual")
     {
       // Дубляж — первой дорожкой, оригинал — второй.
-      format = $"bestvideo[height<={h}]{codec}+bestaudio{dubF}+bestaudio{origF}/bestvideo{codec}+bestaudio{dubF}+bestaudio{origF}";
+      format = $"bestvideo[height<={h}]{codec}+{dubSel}+{origSel}/bestvideo{codec}+{dubSel}+{origSel}";
       mergeArgs.Add("--merge-output-format");
       mergeArgs.Add("mkv");
       streamArgs.Add("--audio-multistreams");
-      ppArgs.AddRange(DualPpArgs(dubLang, origLang));
+      ppArgs.AddRange(DualPpArgs(dubLang, origLang, mp3Parts));
     }
     else if (trackMode == "dub")
     {
-      format = $"bestvideo[height<={h}]{codec}+bestaudio{dubF}/bestvideo{codec}+bestaudio{dubF}";
+      format = $"bestvideo[height<={h}]{codec}+{dubSel}/bestvideo{codec}+{dubSel}";
       mergeArgs.Add("--merge-output-format");
       mergeArgs.Add("mp4");
+      if (mp3Parts.Length > 0) ppArgs.AddRange(MergerPpArgs(mp3Parts));
+    }
+    else if (!string.IsNullOrEmpty(codec) || !string.IsNullOrEmpty(acodecF) || isMp3)
+    {
+      format = $"bestvideo[height<={h}]{codec}+{audioBest}/bestvideo[height<={h}]{codec}/bestvideo[height<={h}]+{audioBest}/best[height<={h}]/best";
+      mergeArgs.Add("--merge-output-format");
+      mergeArgs.Add("mp4");
+      if (mp3Parts.Length > 0) ppArgs.AddRange(MergerPpArgs(mp3Parts));
     }
     else
     {
-      format = string.IsNullOrEmpty(codec)
-        ? $"bestvideo[height<={h}]+bestaudio/best[height<={h}]/best"
-        : $"bestvideo[height<={h}]{codec}+bestaudio/bestvideo[height<={h}]{codec}/bestvideo[height<={h}]+bestaudio/best[height<={h}]/best";
+      format = $"bestvideo[height<={h}]+{audioBest}/best[height<={h}]/best";
       mergeArgs.Add("--merge-output-format");
       mergeArgs.Add("mp4");
     }
   }
-  else if (quality == "best")
+  else if (quality == "best" || bestMp4AsBest)
   {
     if (trackMode == "dual")
     {
       // Дубляж — первой дорожкой, оригинал — второй.
-      format = $"bestvideo{codec}+bestaudio{dubF}+bestaudio{origF}/bestvideo+bestaudio+bestaudio";
+      format = $"bestvideo{codec}+{dubSel}+{origSel}/bestvideo+bestaudio+bestaudio";
       mergeArgs.Add("--merge-output-format");
       mergeArgs.Add("mkv");
       streamArgs.Add("--audio-multistreams");
-      ppArgs.AddRange(DualPpArgs(dubLang, origLang));
+      ppArgs.AddRange(DualPpArgs(dubLang, origLang, mp3Parts));
     }
     else if (trackMode == "dub")
     {
-      format = $"bestvideo{codec}+bestaudio{dubF}/bestvideo+bestaudio";
+      format = $"bestvideo{codec}+{dubSel}/bestvideo+bestaudio";
       mergeArgs.Add("--merge-output-format");
       mergeArgs.Add("mp4");
+      if (mp3Parts.Length > 0) ppArgs.AddRange(MergerPpArgs(mp3Parts));
+    }
+    else if (!string.IsNullOrEmpty(codec) || !string.IsNullOrEmpty(acodecF) || isMp3)
+    {
+      format = $"bestvideo{codec}+{audioBest}/bestvideo{codec}/bestvideo+{audioBest}/best";
+      mergeArgs.Add("--merge-output-format");
+      mergeArgs.Add("mp4");
+      if (mp3Parts.Length > 0) ppArgs.AddRange(MergerPpArgs(mp3Parts));
     }
     else
     {
-      format = string.IsNullOrEmpty(codec)
-        ? "bestvideo+bestaudio/best"
-        : $"bestvideo{codec}+bestaudio/bestvideo{codec}/bestvideo+bestaudio/best";
+      format = $"bestvideo+{audioBest}/best";
       mergeArgs.Add("--merge-output-format");
       mergeArgs.Add("mp4");
     }
@@ -1040,6 +1107,7 @@ sealed class DownloadTask
   public string DownloadDir { get; set; } = "";
   public string Quality { get; set; } = "";
   public string Vcodec { get; set; } = "auto";
+  public string Acodec { get; set; } = "auto";
   public string Abitrate { get; set; } = "0";
   public string TrackMode { get; set; } = "orig";
   public string DubLang { get; set; } = "";

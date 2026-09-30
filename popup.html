@@ -13,7 +13,7 @@
         <div class="titleBlock">
           <div class="titleRow">
             <h1>YouTube</h1>
-            <span id="version" class="version">v0.4.8</span>
+            <span id="version" class="version">v0.5.0</span>
           </div>
           <p>Загрузчик · локальный yt-dlp</p>
         </div>
@@ -50,7 +50,7 @@
           <div class="fieldRow">
             <div class="labelRow">
               <label for="quality">Формат загрузки</label>
-              <span class="inlineHint">Видео · Аудио · Кодек</span>
+              <span class="inlineHint">Видео · Аудио · Кодеки</span>
             </div>
             <div class="subLabel">Видео</div>
             <div id="qualityPresets" class="qualityPresets" aria-label="Пресеты качества видео">
@@ -105,6 +105,19 @@
               <option value="vp9">Кодек: VP9</option>
               <option value="avc">Кодек: AVC / H.264</option>
             </select>
+            <div class="subLabel">Аудиокодек (для видео)</div>
+            <div id="acodecPresets" class="qualityPresets" aria-label="Выбор аудиокодека">
+              <button type="button" class="codecChip active" data-acodec="auto" aria-pressed="true">Авто</button>
+              <button type="button" class="codecChip" data-acodec="aac" aria-pressed="false">AAC / M4A</button>
+              <button type="button" class="codecChip" data-acodec="opus" aria-pressed="false">Opus</button>
+              <button type="button" class="codecChip" data-acodec="mp3" aria-pressed="false">MP3</button>
+            </div>
+            <select id="acodec" class="qualitySelect">
+              <option value="auto">Аудио: авто (лучшее)</option>
+              <option value="aac">Аудио: AAC / M4A (совместимость)</option>
+              <option value="opus">Аудио: Opus (качество)</option>
+              <option value="mp3">Аудио: MP3 (перекодирование)</option>
+            </select>
             <div class="subLabel">Битрейт аудио</div>
             <div id="bitratePresets" class="qualityPresets" aria-label="Битрейт аудио">
               <button type="button" class="codecChip active" data-bitrate="0" aria-pressed="true">Лучшее</button>
@@ -140,7 +153,7 @@
               <select id="dublang"></select>
               <p id="dubHint" class="fieldHint">После поиска здесь появятся найденные в видео языки дубляжа.</p>
             </div>
-            <p class="fieldHint">Видео собирается из лучших дорожек YouTube до выбранной высоты и сводится в MP4 (две дорожки — в MKV). AV1/VP9 дают 4K/8K, AVC — максимальную совместимость. Аудио извлекается через ffmpeg. Дубляж доступен только там, где его загрузил автор.</p>
+            <p class="fieldHint">Видео собирается из лучших дорожек YouTube до выбранной высоты и сводится в MP4 (две дорожки — в MKV). AV1/VP9 дают 4K/8K, AVC — максимальную совместимость. Аудиокодек: AAC — совместимость с плеерами, Opus — лучшее качество, MP3 — перекодирование через ffmpeg (медленнее, битрейт задаётся ниже), Авто — лучшая доступная дорожка (обычно Opus). Аудио извлекается через ffmpeg. Дубляж доступен только там, где его загрузил автор.</p>
           </div>
 
           <details class="advancedSettings">

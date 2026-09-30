@@ -5,11 +5,13 @@ const urlInput = document.getElementById("url");
 const downloadDirInput = document.getElementById("downloadDir");
 const qualityInput = document.getElementById("quality");
 const codecInput = document.getElementById("vcodec");
+const acodecInput = document.getElementById("acodec");
 const useBrowserCookiesInput = document.getElementById("useBrowserCookies");
 const useCurrentPageButton = document.getElementById("useCurrentPage");
 const clearUrlButton = document.getElementById("clearUrl");
 const qualityChips = [...document.querySelectorAll(".qualityPresets .qualityChip")];
 const codecChips = [...document.querySelectorAll("#codecPresets .codecChip")];
+const acodecChips = [...document.querySelectorAll("#acodecPresets .codecChip")];
 const bitrateChips = [...document.querySelectorAll("#bitratePresets .codecChip")];
 const trackChips = [...document.querySelectorAll("#trackPresets .codecChip")];
 const abitrateInput = document.getElementById("abitrate");
@@ -19,6 +21,7 @@ const dubLangRow = document.getElementById("dubLangRow");
 const dubHint = document.getElementById("dubHint");
 const cookiesStorageKey = "ytDlpUseCookies";
 const codecStorageKey = "ytDlpVcodec";
+const acodecStorageKey = "ytDlpAcodec";
 const qualityStorageKey = "ytDlpQuality";
 const abitrateStorageKey = "ytDlpAbitrate";
 const trackStorageKey = "ytDlpTrackMode";
@@ -83,6 +86,7 @@ const previewTasks = [
     percent: 64.3,
     quality: "1080",
     vcodec: "avc",
+    acodec: "aac",
     playlistMode: "single",
     speed: "5.2MiB/s",
     eta: "00:18",
@@ -94,6 +98,7 @@ const previewTasks = [
     percent: 100,
     quality: "audio-mp3",
     vcodec: "auto",
+    acodec: "auto",
     abitrate: "192K",
     trackMode: "orig",
     dubLang: "",
@@ -127,7 +132,7 @@ let previewMode = "";
 let oauthConfigured = true;
 // Версия протокола хоста. При расхождении новые функции молча не работают,
 // поэтому один раз за сессию показываем просьбу переустановить хост.
-const EXPECTED_HOST_VERSION = "0.4.6";
+const EXPECTED_HOST_VERSION = "0.4.8";
 let hostVersionWarned = false;
 
 function checkHostVersion(response) {
@@ -250,6 +255,7 @@ function syncQualityChips() {
     chip.setAttribute("aria-pressed", active ? "true" : "false");
   });
   syncCodecChips();
+  syncAcodecChips();
   syncBitrateChips();
   syncTrackChips();
 }
@@ -278,13 +284,15 @@ function syncBitrateChips() {
   if (abitrateInput) {
     abitrateInput.value = normalizeAbitrate(abitrateInput.value);
   }
-  const enabled = isLossyAudio(qualityInput.value);
+  // Битрейт: для аудио-пресетов MP3/M4A/Opus + для видео с MP3 (перекодирование).
+  const enabled = isLossyAudio(qualityInput.value) ||
+    (!isAudioQuality(qualityInput.value) && getAcodec() === "mp3");
   bitrateChips.forEach(chip => {
     const active = chip.dataset.bitrate === (abitrateInput?.value || "0");
     chip.classList.toggle("active", active);
     chip.setAttribute("aria-pressed", active ? "true" : "false");
     chip.disabled = !enabled;
-    chip.title = enabled ? "" : "Битрейт доступен для MP3/M4A/Opus";
+    chip.title = enabled ? "" : "Битрейт: для аудио MP3/M4A/Opus или видео с MP3";
   });
   if (abitrateInput) {
     abitrateInput.disabled = !enabled;
@@ -292,7 +300,11 @@ function syncBitrateChips() {
 }
 
 function getAbitrate() {
-  return isLossyAudio(qualityInput.value) ? normalizeAbitrate(abitrateInput?.value) : "0";
+  if (isLossyAudio(qualityInput.value)) return normalizeAbitrate(abitrateInput?.value);
+  if (!isAudioQuality(qualityInput.value) && getAcodec() === "mp3") {
+    return normalizeAbitrate(abitrateInput?.value);
+  }
+  return "0";
 }
 
 function syncTrackChips() {
@@ -392,6 +404,35 @@ function getVcodec() {
   return isAudioQuality(qualityInput.value) ? "auto" : v;
 }
 
+function normalizeAcodec(value) {
+  const v = String(value ?? "auto").trim().toLowerCase();
+  // YouTube отдаёт только opus и aac (m4a); mp3 — перекодирование через ffmpeg.
+  if (v === "m4a") return "aac";
+  return ["auto", "aac", "opus", "mp3"].includes(v) ? v : "auto";
+}
+
+function syncAcodecChips() {
+  if (acodecInput) {
+    acodecInput.value = normalizeAcodec(acodecInput.value);
+  }
+  const audio = isAudioQuality(qualityInput.value);
+  acodecChips.forEach(chip => {
+    const active = chip.dataset.acodec === (acodecInput?.value || "auto");
+    chip.classList.toggle("active", active);
+    chip.setAttribute("aria-pressed", active ? "true" : "false");
+    chip.disabled = audio;
+    chip.title = audio ? "Аудиокодек применяется только к видео (для аудио — пресет MP3/M4A/Opus)" : "";
+  });
+  if (acodecInput) {
+    acodecInput.disabled = audio;
+  }
+}
+
+function getAcodec() {
+  const v = normalizeAcodec(acodecInput?.value);
+  return isAudioQuality(qualityInput.value) ? "auto" : v;
+}
+
 function cleanCookieField(value) {
   return String(value ?? "").replace(/[\t\r\n]/g, "");
 }
@@ -442,6 +483,7 @@ async function resolveCurrentUrl() {
   localStorage.setItem(cookiesStorageKey, useBrowserCookiesInput.checked ? "1" : "0");
   localStorage.setItem(qualityStorageKey, normalizeQuality(qualityInput.value));
   localStorage.setItem(codecStorageKey, codecInput?.value || "auto");
+  localStorage.setItem(acodecStorageKey, normalizeAcodec(acodecInput?.value));
   localStorage.setItem(abitrateStorageKey, normalizeAbitrate(abitrateInput?.value));
   localStorage.setItem(trackStorageKey, normalizeTrackMode(trackInput?.value));
   localStorage.setItem(dublangStorageKey, (dubLangInput?.value || "").trim());
@@ -486,6 +528,7 @@ async function downloadSelectedVideos() {
 
   const quality = normalizeQuality(qualityInput.value);
   const vcodec = getVcodec();
+  const acodec = getAcodec();
   const abitrate = getAbitrate();
   const trackMode = getTrackMode();
   const dubLang = getDubLang();
@@ -504,6 +547,7 @@ async function downloadSelectedVideos() {
   localStorage.setItem(cookiesStorageKey, useBrowserCookiesInput.checked ? "1" : "0");
   localStorage.setItem(qualityStorageKey, quality);
   localStorage.setItem(codecStorageKey, vcodec);
+  localStorage.setItem(acodecStorageKey, acodec);
   localStorage.setItem(abitrateStorageKey, abitrate);
   localStorage.setItem(trackStorageKey, trackMode);
   localStorage.setItem(dublangStorageKey, dubLang);
@@ -531,6 +575,7 @@ async function downloadSelectedVideos() {
         downloadDir,
         quality,
         vcodec,
+        acodec,
         abitrate,
         trackMode,
         dubLang,
@@ -682,7 +727,7 @@ function renderVideos(videos) {
   resolveSummary.textContent = `Всего видео: ${videos.length}. Можно выбрать одно или несколько.`;
   resolveChips.innerHTML = `
     <span>Видео: ${videos.length}</span>
-    <span>${escapeHtml(fullFormatText(qualityInput.value, getVcodec(), getAbitrate(), getTrackMode(), getDubLang()))}</span>
+    <span>${escapeHtml(fullFormatText(qualityInput.value, getVcodec(), getAcodec(), getAbitrate(), getTrackMode(), getDubLang()))}</span>
     <span>Папка задана</span>
   `;
   videoList.innerHTML = videos.map((video, index) => `
@@ -727,6 +772,7 @@ function renderTasks(tasks) {
     const speed = task.Speed || task.speed || "";
     const quality = task.Quality || task.quality || "";
     const vcodec = task.Vcodec || task.vcodec || "auto";
+    const acodec = task.Acodec || task.acodec || "auto";
     const abitrate = task.Abitrate || task.abitrate || "0";
     const trackMode = task.TrackMode || task.trackMode || task.trackmode || "orig";
     const dubLang = task.DubLang || task.dubLang || task.dublang || "";
@@ -739,7 +785,7 @@ function renderTasks(tasks) {
           <span>${percent.toFixed(percent ? 1 : 0)}%</span>
         </div>
         <div class="bar"><span style="width:${percent}%"></span></div>
-        <div class="meta">${escapeHtml(fullFormatText(quality, vcodec, abitrate, trackMode, dubLang))}${speed ? ` · ${escapeHtml(speed)}` : ""}${eta ? ` · ETA ${escapeHtml(eta)}` : ""}</div>
+        <div class="meta">${escapeHtml(fullFormatText(quality, vcodec, acodec, abitrate, trackMode, dubLang))}${speed ? ` · ${escapeHtml(speed)}` : ""}${eta ? ` · ETA ${escapeHtml(eta)}` : ""}</div>
         <div class="line">${escapeHtml(line)}</div>
         <div class="taskActions">
           <button class="ghost small" data-cancel="${escapeHtml(id)}" ${canCancel ? "" : "disabled"}>Отмена</button>
@@ -884,6 +930,15 @@ function codecText(value) {
   }[value || "auto"] || value;
 }
 
+function acodecText(value) {
+  return {
+    auto: "",
+    aac: "AAC",
+    opus: "Opus",
+    mp3: "MP3"
+  }[normalizeAcodec(value)] ?? value;
+}
+
 function abitrateText(value) {
   const v = normalizeAbitrate(value);
   return v === "0" ? "" : ` · ${v.replace("K", "")} кбит/с`;
@@ -896,7 +951,14 @@ function trackText(mode, dubLang) {
   return "";
 }
 
-function fullFormatText(quality, vcodec, abitrate, trackMode, dubLang) {
+function fullFormatText(quality, vcodec, acodec, abitrate, trackMode, dubLang) {
+  // Совместимость со старым вызовом из 5 аргументов (без acodec).
+  if (typeof dubLang === "undefined") {
+    dubLang = trackMode;
+    trackMode = abitrate;
+    abitrate = acodec;
+    acodec = "auto";
+  }
   const q = normalizeQuality(quality);
   const tm = normalizeTrackMode(trackMode);
   const dl = (dubLang || "").trim();
@@ -907,7 +969,8 @@ function fullFormatText(quality, vcodec, abitrate, trackMode, dubLang) {
     return `${qualityText(q)}${abitrateText(abitrate)}`;
   }
   const vc = vcodec && vcodec !== "auto" ? ` · ${codecText(vcodec)}` : "";
-  return `${qualityText(q)}${vc}${trackText(tm, dl)}`;
+  const ac = normalizeAcodec(acodec) !== "auto" ? ` · ${acodecText(acodec)}` : "";
+  return `${qualityText(q)}${vc}${ac}${trackText(tm, dl)}`;
 }
 
 function escapeHtml(value) {
@@ -938,6 +1001,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     const savedCodec = localStorage.getItem(codecStorageKey) || "auto";
     if ([...codecInput.options].some(o => o.value === savedCodec)) {
       codecInput.value = savedCodec;
+    }
+  }
+  if (acodecInput) {
+    const savedAcodec = normalizeAcodec(localStorage.getItem(acodecStorageKey) || "auto");
+    if ([...acodecInput.options].some(o => o.value === savedAcodec)) {
+      acodecInput.value = savedAcodec;
     }
   }
   if (abitrateInput) {
@@ -1015,6 +1084,18 @@ codecChips.forEach(chip => chip.addEventListener("click", () => {
 codecInput?.addEventListener("change", () => {
   localStorage.setItem(codecStorageKey, codecInput.value);
   syncCodecChips();
+});
+acodecChips.forEach(chip => chip.addEventListener("click", () => {
+  if (chip.disabled) return;
+  if (acodecInput) acodecInput.value = chip.dataset.acodec;
+  localStorage.setItem(acodecStorageKey, chip.dataset.acodec);
+  syncAcodecChips();
+  syncBitrateChips();
+}));
+acodecInput?.addEventListener("change", () => {
+  localStorage.setItem(acodecStorageKey, acodecInput.value);
+  syncAcodecChips();
+  syncBitrateChips();
 });
 bitrateChips.forEach(chip => chip.addEventListener("click", () => {
   if (chip.disabled) return;
